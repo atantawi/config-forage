@@ -127,7 +127,7 @@ dense ⇒ dp = 1 and EP false; EP ⇒ tp·dp > 1; tp·dp ≤ 8 (one node); `gpu_
 - Produces:
   - `BlisEnv` (dataclass): `blis: Path, catalog: Path, registry: Path, scenarios_dir: Path, timeout: int = 120`, plus `BlisEnv.from_env()` reading `BLIS_BIN, BLIS_CATALOG, BLIS_REGISTRY, BLIS_SCENARIOS`
   - `CachedRunner(env: BlisEnv | None, scenario: Scenario, cache_dir: Path, run_fn=None)`, where `run_fn(config: dict, concurrency: int, seed: int) -> dict` defaults to the vendored `run_one`. Tests inject a fake.
-  - `CachedRunner.run(config: dict, concurrency: int, seed: int | None = None) -> dict` returns the upstream record shape (`metrics`, `error`, `returncode`, `wall_s`, `deployment`)
+  - `CachedRunner.run(config: dict, concurrency: int, seed: int | None = None) -> dict` returns the upstream record shape (`metrics`, `error`, `returncode`, `wall_s`, `deployment`) plus `cache_key`
   - `CachedRunner.unique_runs: int`, `CachedRunner.cache_hits: int`
   - `cache_key(config, concurrency, seed, scenario) -> str`: the sha256 of the canonical JSON of the config, concurrency, seed, workload, `num_requests` (= upstream `requests_for(c, base)` = `max(base, 4c)`), model, hardware, engine_version and the pin tuple
   - `run_batch(fn: Callable[[T], R], items: list[T], workers: int | None = None) -> list[R]`: a process pool whose default cap is `min(os.cpu_count() - 1, 32)`
