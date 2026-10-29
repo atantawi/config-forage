@@ -1,6 +1,7 @@
 # config-forage: BSA for serving-configuration search — design
 
-Date: 2026-10-28. Status: draft for review.
+Date: 2026-10-28. Status: approved; amended 2026-10-29 to match the implemented rules (§4, §7,
+marked "Amended").
 
 ## 1. Intent
 
@@ -91,7 +92,14 @@ Anti-goals (would make this a failure even if it runs)
   TTFT if set), score = tokens_per_sec / G at h·C* (h = 0.8 default, configurable). Configs with
   no feasible concurrency or that BLIS rejects score as failures (None → never elites).
   Lower-is-better in the engine, so pass the negative.
-- **Budget unit:** BLIS runs (cache hits free, counted separately as "unique runs").
+  *Amended:*
+  - C* is searched upward without a ceiling: the probe walks upstream's ladder, keeps doubling to
+    the first failure (hard cap c = 4096, flagged as censored), then bisects.
+  - A run that admits fewer requests than it was offered counts as an SLO failure.
+- **Budget unit:** distinct BLIS runs that the search touched (config, concurrency, seed). Cache
+  hits are included, so a method's count does not depend on what ran before it.
+  *Amended:* a config that the topology rules reject is not sent to BLIS, but it is charged one run,
+  as if BLIS had rejected it at c = 1.
 
 ## 5. Shape of the system (builder may refine)
 
@@ -144,6 +152,9 @@ Seeds: ≥ 10 per (method, budget) for the stochastic methods; report median and
 Fairness: give TPE/SMAC the same hard constraints the fairest way they allow (constraint
 callbacks / forbidden clauses in SMAC's ConfigSpace); infeasible samples they emit still cost a
 budget unit only if BLIS is actually called — report both conventions.
+*Amended:* SMAC never proposes an infeasible config, because its forbiddens exclude them. TPE's
+pruned suggestions are reported both free ("tpe") and at one run each ("tpe (pruned = 1 run)").
+Every other arm is charged one run per rule-infeasible sample (§4).
 
 ## 7b. Calls made by the designer (from the builder check; user may override)
 

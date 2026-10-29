@@ -98,8 +98,20 @@ equal unique runs, never at equal configs.
 
 ## Results
 
+First benchmark: S-mid v2 (glm-5.3-flash, 16× H100, chatbot, 4,608 configs; full grid as ground
+truth). The optimum is 132.5 tok/s per GPU at 2 × tp2·dp4 + EP. Results at a budget of 1,000 unique
+BLIS runs, over 10 seeds:
+
+- **BSA with the feasibility biaser:** within 0.5% of the optimum on 10/10 seeds.
+- **SMAC:** 8/10. **TPE:** 6/10.
+- **Upstream one-knob-at-a-time heuristic:** reaches 1% fastest (235 runs), then stalls at 0.84%.
+- **Significance:** none of these differences is significant at n = 10.
+
+This is a sanity check on a space small enough to enumerate. The large-space claim (S-large,
+4.6 × 10⁷ configs) is not yet tested.
+
 See `docs/research-log.md` (dated entries) and `docs/experiments/` for the ground truth, sensitivity
-analyses and benchmark results.
+analyses and full benchmark tables.
 
 ## Caveats
 

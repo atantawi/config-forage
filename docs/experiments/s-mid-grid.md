@@ -154,7 +154,36 @@ moves 1–6% but stays out of S-mid (it is in S-large) to keep the size near 5k.
 Size: 8 topologies (min_footprint 8) × 4 mnbt × 4 block_size × 3 scheduler × 2 preemption ×
 2 admission × 3 routing = **4,608 configs, all at width 8** (only the tp1·dp8 configs can fail).
 
-## Ground truth (S-mid v2)
+## Ground truth (S-mid v2, corrected probe) — current
+
+> The next section was computed with the probe capped at c = 32. That cap cut off C* for 844
+> configs, including the whole top of the ranking. The section is kept as a record, but it is
+> **superseded** by this one (see research-log, 2026-10-28 "Final review findings").
+
+`cf-grid` with the probe doubling past the ladder to the first failure (cap 4096), into
+results/s-mid3/grid.jsonl: **4,608 configs, all scored, 0 censored** (max C* 62), 3 min at 9 workers.
+
+**Optimum −132.50** (132.5 tok/s/GPU) at **2 × tp2·dp4 + EP, least-loaded routing,
+max_num_batched_tokens 4096, block_size 16, scheduler fcfs, C* = 61.** That is 39% above the capped
+grid's −95.14, at a different topology. All 48 configs within 0.5% have C* = 61. **Plateau: 112
+configs within 1%, 144 within 5%.**
+
+Benchmark (8 methods × 10 seeds, B = 1000 unique runs; full table in the research log):
+
+| method | regret at B=1000 (median) | runs to 1% (median) | seeds within 0.5% |
+|---|---|---|---|
+| bsa-feas | 0 | 322 | 10/10 |
+| smac | 0 | 308 | 8/10 |
+| random (feasible) | 0 | 403 | 7/10 |
+| tpe | 0 | 352 | 6/10 |
+| bsa (no biasers) | 14.9 | 732 | 5/10 |
+| incumbent | 1.11 (0.84%) | 235 | 0/10 |
+| coord-ascent | 66.2 | never | 0/10 |
+
+The upstream incumbent reaches 1% fastest, then stalls, and never finds the optimum. None of the
+differences among the guided methods is significant at n = 10.
+
+## Ground truth (S-mid v2, capped probe) — superseded
 
 `cf-grid spaces/glm53flash-h100-chatbot-16.yaml --cache cache --out results/s-mid2/grid.jsonl
 --workers 9`: **4,608 configs, all 4,608 scored** (with the floor, tp1·dp8 at gpu_mem 0.9 runs),

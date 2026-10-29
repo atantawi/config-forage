@@ -192,3 +192,23 @@ Three findings from the second PR #1 review, one commit each.
 **No existing result is affected:** the shipped spaces' widest axis has 9 options, so eps stays
 0.02 and BSA is bit-identical (tested). The pins and the space hash are unchanged. Traces written
 before this change carry no provenance. That is not flagged when it is the only gap.
+
+## 2026-10-29 — State at merge of PR #1, and next steps
+
+**Current results:** S-mid v2 with the corrected probe (results/s-mid3; tables in the 2026-10-28
+"Rerun" entry and in `docs/experiments/s-mid-grid.md`).
+
+**Spec amended** to match the implemented rules: an infeasible sample costs 1 run, C* is searched
+upward without a ceiling, and a run that sheds requests counts as a failure.
+
+Open, in priority order:
+1. **Multi-node instances.** Should the one-node rule be relaxed? This is the user's decision. If
+   yes, allow widths that are a multiple of 8 up to the budget, then regrid.
+2. **S-large benchmark.** No grid; compare methods on best-found against budget. This is the actual
+   large-space claim.
+3. **A scenario with live diagnostic rules.** This needs a TTFT SLO, or unpinned memory and batch
+   knobs, so the diagnostic arm is tested at all.
+4. **Small follow-ups:**
+   - `cf-analyze --heldout` doesn't check `--space` against the runs' hash.
+   - The timeout flag per config.
+   - BsaSearcher validates eps at construction.
