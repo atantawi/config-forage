@@ -60,6 +60,7 @@ name = "config-forage"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "configspace" },
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "optuna" },
@@ -75,16 +76,17 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "matplotlib" },
-    { name = "numpy" },
-    { name = "optuna" },
-    { name = "pyyaml" },
-    { name = "scipy" },
-    { name = "smac" },
+    { name = "configspace", specifier = ">=1.2,<2" },
+    { name = "matplotlib", specifier = ">=3.8,<4" },
+    { name = "numpy", specifier = ">=2.0,<3" },
+    { name = "optuna", specifier = ">=5,<6" },
+    { name = "pyyaml", specifier = ">=6.0,<7" },
+    { name = "scipy", specifier = ">=1.13,<2" },
+    { name = "smac", specifier = ">=2.4,<3" },
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest" }]
+dev = [{ name = "pytest", specifier = ">=8" }]
 
 [[package]]
 name = "configspace"

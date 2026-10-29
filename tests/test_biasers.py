@@ -144,3 +144,18 @@ def test_diagnostic_biaser_in_bsa():
     b = DiagnosticBiaser(sp, [Rule("kv_starved", "c", "higher")])
     BsaSearcher(sp, biasers=[b], workers=1).search(KvStarved(sp), 32, 0)
     assert np.all(np.diff(b.factor(2, (None,) * 4)) > 0) and b.fractions["kv_starved"] == 1.0
+
+
+def test_active_rules():
+    from dataclasses import replace
+
+    from config_forage.space import Slo
+    sp = space()  # gmu 4 values, cache_dtype 2, max_num_seqs 3, mnbt 2, block_size 1
+    rules = (*DEFAULT_RULES, Rule("itl", "block_size", "higher"), Rule("kv_starved", "cache_dtype", "fp16"),
+             Rule("itl", "absent_knob", "lower"))
+    act = DiagnosticBiaser(sp, rules).active_rules()
+    assert act == [r for r in DEFAULT_RULES if r.signal != "ttft_bound"]  # no TTFT SLO: never ttft-bound
+    sp_t = KnobSpace(replace(sp.scenario, slo=Slo(20.0, ttft_p99_ms=500.0)), sp.knobs)
+    assert DiagnosticBiaser(sp_t, rules).active_rules() == list(DEFAULT_RULES)
+    pinned = KnobSpace(sp.scenario, tuple(Knob(k.name, k.values[:1]) for k in sp.knobs))
+    assert DiagnosticBiaser(pinned, DEFAULT_RULES).active_rules() == []

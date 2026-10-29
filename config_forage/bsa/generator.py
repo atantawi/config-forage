@@ -1,6 +1,6 @@
 """Categorical generator P over a DecisionSpace with a smoothed elite (CEM/BSA) update.
 
-Extracted from ai-forage c4339d2; this copy is canonical."""
+Extracted from the author's earlier BSA research code (commit c4339d2)."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ Scheme = Literal["hard", "boltzmann", "rank"]
 
 
 class CategoricalGenerator:
-    """`scheme` picks the elite update (bsa-fit §4.2):
+    """`scheme` picks the elite update:
 
     - "hard": the best rho fraction, equal weights (the original update);
     - "boltzmann": the samples at or better than the q-quantile, weighted exp(-(s - s_best)/tau)

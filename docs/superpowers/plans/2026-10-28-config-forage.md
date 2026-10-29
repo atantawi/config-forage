@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Pinned stack: inference-sim `v0.10.0` @ `0d092d4ef64f605046de1181adf8e2b6ee564725`, kernel `v0.1.0`, blis-catalog `0.2.1`, blis-registry `v0.1.1`.
-- The BSA engine is extracted from ai-forage commit `c4339d2` into `config_forage/bsa/`, numpy only. No LLM code and no imports from `forage`.
+- The BSA engine is extracted from the author's earlier private research codebase (commit `c4339d2`) into `config_forage/bsa/`, numpy only, with no imports from that codebase.
 - Budget unit = **unique BLIS runs** (cache hits are free and counted separately). Compare methods only at equal unique runs.
 - Engine convention: lower score is better. The objective returns `-(tokens_per_sec / gpus)` at the usable concurrency, or `None` for a failed or infeasible config.
 - Defaults: headroom h = 0.8; SLO = ITL p99 ≤ 20 ms (plus TTFT p99 if the scenario sets one); tie tolerance 0.5%; "near-optimal" = within 1% of the grid optimum.
@@ -63,13 +63,13 @@ docs/research-log.md, docs/experiments/                    (Task 10)
 - Test: `tests/test_bsa_space.py`, `tests/test_bsa_generator.py`
 
 **Interfaces:**
-- Produces: `config_forage.bsa.space.{Axis, DecisionSpace, Decision}`, `config_forage.bsa.generator.{CategoricalGenerator, InfeasibleSample}`, `config_forage.bsa.biaser.{Biaser, IdentityBiaser, OracleBiaser, ApplicabilityBiaser}`, with signatures identical to ai-forage `c4339d2`.
+- Produces: `config_forage.bsa.space.{Axis, DecisionSpace, Decision}`, `config_forage.bsa.generator.{CategoricalGenerator, InfeasibleSample}`, `config_forage.bsa.biaser.{Biaser, IdentityBiaser, OracleBiaser, ApplicabilityBiaser}`, with signatures identical to the source at `c4339d2`.
 
 - [ ] **Step 1:** Run `uv init --package`. Set `name = "config-forage"`, `requires-python = ">=3.12"`, deps `numpy, pyyaml, optuna, smac, scipy, matplotlib`, and dev `pytest`. Add a hatch wheel `packages = ["config_forage"]`.
-- [ ] **Step 2:** Copy `forage/space.py` (minus `BINPACK*` and `SPACES`), `forage/generator.py` (verbatim) and `forage/biaser.py` (minus `LLMPriorBiaser`) from `~/Projects/github/ai-forage` at `c4339d2`. Rewrite the imports to `config_forage.bsa.*`. Each file's module docstring gets the line `Extracted from ai-forage c4339d2; this copy is canonical.`
-- [ ] **Step 3:** Port `ai-forage/tests/test_generator.py` and `tests/test_space.py`, replacing `BINPACK_SPACE` with a local fixture `SPACE6` that has the same sizes `(4, 4, 3, 3, 2, 3)` so the expected numbers are unchanged. Drop any test that needs `LLMPriorBiaser`.
+- [ ] **Step 2:** Copy the decision-space, generator and structural-biaser modules from the earlier codebase at `c4339d2`, leaving out its problem-specific spaces and biasers. Rewrite the imports to `config_forage.bsa.*`. Each file's module docstring gets the line `Extracted from the author's earlier BSA research code (commit c4339d2).`
+- [ ] **Step 3:** Port the generator and space tests, replacing the source's example space with a local fixture `SPACE6` that has the same sizes `(4, 4, 3, 3, 2, 3)` so the expected numbers are unchanged. Drop any test that needs a component not extracted.
 - [ ] **Step 4:** Run `uv run pytest -q`. Expect all ported tests to pass.
-- [ ] **Step 5:** Commit: `Extract the BSA engine from ai-forage c4339d2`.
+- [ ] **Step 5:** Commit: `Extract the BSA engine (c4339d2)`.
 
 ### Task 2: Knob space and feasibility
 
@@ -132,7 +132,7 @@ dense ⇒ dp = 1 and EP false; EP ⇒ tp·dp > 1; tp·dp ≤ 8 (one node); `gpu_
   - `cache_key(config, concurrency, seed, scenario) -> str`: the sha256 of the canonical JSON of the config, concurrency, seed, workload, `num_requests` (= upstream `requests_for(c, base)` = `max(base, 4c)`), model, hardware, engine_version and the pin tuple
   - `run_batch(fn: Callable[[T], R], items: list[T], workers: int | None = None) -> list[R]`: a process pool whose default cap is `min(os.cpu_count() - 1, 32)`
 
-- [ ] **Step 1:** Copy upstream `.claude/skills/config-search/scripts/run_blis.py` from inference-sim/blis-config-search, unchanged, and prepend `# Vendored from inference-sim/blis-config-search (Apache-2.0) at <commit sha>; do not edit — re-vendor.` Record the sha with `git -C /tmp/bcs-recon/blis-config-search rev-parse HEAD`.
+- [ ] **Step 1:** Copy upstream `.claude/skills/config-search/scripts/run_blis.py` from inference-sim/blis-config-search, unchanged, and prepend `# Vendored from inference-sim/blis-config-search (Apache-2.0) at <commit sha>; do not edit — re-vendor.` Record the sha with `git rev-parse HEAD` in the upstream checkout.
 - [ ] **Step 2: Write the failing tests** (no BLIS, using a fake `run_fn` that counts calls):
   - `test_cache_hit_does_not_call_blis`: the same (config, c) twice ⇒ fake called once, `unique_runs == 1`, `cache_hits == 1`.
   - `test_cache_persists_across_instances`: a new `CachedRunner` on the same `cache_dir` ⇒ 0 new calls.
@@ -316,7 +316,7 @@ Each (method, seed) run gets a fresh `Objective` over the shared runner, so `run
 **Interfaces:**
 - Consumes: everything above.
 
-- [ ] **Step 1:** `scripts/setup_blis.sh DEST` clones and builds exactly as upstream SETUP.md §1–2 (it verifies the SHA `0d092d4…` and fails loudly if it differs). It clones catalog `0.2.1` and registry `v0.1.1`, then prints the four `export BLIS_*` lines. Run it into `~/Projects/github/blis-stack`.
+- [ ] **Step 1:** `scripts/setup_blis.sh DEST` clones and builds exactly as upstream SETUP.md §1–2 (it verifies the SHA `0d092d4…` and fails loudly if it differs). It clones catalog `0.2.1` and registry `v0.1.1`, then prints the four `export BLIS_*` lines. Run it into a local directory, e.g. `../blis-stack`.
 - [ ] **Step 2:** Write `test_blis_smoke`: one run of `{tp: 8, enable_expert_parallel: true, num_instances: 2}` at c = 8 on glm-5.3-flash/h100/chatbot gives `error is None` and `tokens_per_sec > 0`, and a `probe` gives a non-None score. Run `uv run pytest -m blis -q`. Expect PASS.
 - [ ] **Step 3:** Write the S-mid space: glm-5.3-flash, h100, chatbot, budget 16, ITL p99 ≤ 20 ms. Axes: tp {1, 2, 4, 8}, dp {1, 2, 4, 8}, EP {false, true}, max_num_seqs {32, 64, 128, 256, 512}, max_num_batched_tokens {2048, 4096, 8192, 16384, 32768}, gpu_memory_utilization {0.7, 0.8, 0.9, 0.95}, cache_dtype {auto, fp8}, routing_policy {round-robin, least-loaded, weighted}. Print `n feasible` and the estimated cost (n × ~6 runs × measured median wall_s ÷ workers). If more than 5k configs are feasible, drop values on the axes that matter least (Step 4). Pull `heads_kv` and `arch` from the catalog.
 - [ ] **Step 4: Sensitivity check.** For each axis, from the default config, run one-axis variation and record the spread of `tps_per_gpu`. Write it to `docs/experiments/s-mid-grid.md`, flagging any axis whose spread is below 1% (the spec requires reporting these). Commit.

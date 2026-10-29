@@ -6,7 +6,15 @@ readme = "README.md"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Asser Tantawi", email = "tantawi@us.ibm.com" }]
 requires-python = ">=3.12"
-dependencies = ["numpy", "pyyaml", "optuna", "smac", "scipy", "matplotlib"]
+dependencies = [
+    "numpy>=2.0,<3",
+    "pyyaml>=6.0,<7",
+    "optuna>=5,<6",
+    "smac>=2.4,<3",
+    "ConfigSpace>=1.2,<2",
+    "scipy>=1.13,<2",
+    "matplotlib>=3.8,<4",
+]
 
 [project.scripts]
 cf-grid = "config_forage.bench.grid:main"
@@ -14,7 +22,7 @@ cf-bench = "config_forage.bench.run:main"
 cf-analyze = "config_forage.bench.analyze:main"
 
 [dependency-groups]
-dev = ["pytest"]
+dev = ["pytest>=8"]
 
 [build-system]
 requires = ["hatchling"]

@@ -62,6 +62,7 @@ class DiagnosticBiaser:
         self.space, self.beta, self.rho = space, beta, rho
         names = space.names
         self.rules: list[tuple[str, int, np.ndarray]] = []  # (signal, axis, z)
+        self._rule_of: list[Rule] = []  # the Rule behind each self.rules entry
         for r in rules:
             if r.knob not in names:
                 continue
@@ -78,8 +79,17 @@ class DiagnosticBiaser:
             else:
                 continue
             self.rules.append((r.signal, m, z))
+            self._rule_of.append(r)
         self._factors = [np.ones(len(k.values)) for k in space.knobs]
         self.fractions: dict[str, float] = {s: 0.0 for s in SIGNALS}
+
+    def active_rules(self) -> list[Rule]:
+        """The rules that can ever move a factor in this space: the knob has more than one value, z
+        is not all zero, and the signal can occur (ttft_bound only under a TTFT SLO). An empty list
+        means this biaser is inert: its factors stay all ones."""
+        ttft = self.space.scenario.slo.ttft_p99_ms is not None
+        return [r for r, (s, m, z) in zip(self._rule_of, self.rules)
+                if len(self.space.knobs[m].values) > 1 and np.any(z) and (s != "ttft_bound" or ttft)]
 
     def observe(self, results: Sequence[tuple[Decision, ProbeResult]]) -> None:
         ok = sorted((r for _, r in results if r.score is not None), key=lambda r: r.score)

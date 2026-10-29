@@ -3,7 +3,7 @@
 # Idempotent: existing clones are kept (not re-cloned) but their commits are still verified;
 # the binary is built if missing or older than the checkout's Go sources. Prints the four BLIS_* exports on success.
 #
-#   scripts/setup_blis.sh ~/Projects/github/blis-stack
+#   scripts/setup_blis.sh ../blis-stack
 set -euo pipefail
 
 DEST=${1:?usage: setup_blis.sh DEST}

@@ -7,7 +7,7 @@ import pytest
 from config_forage.search.base import Trace, TracePoint
 from config_forage.search.bsa import BsaSearcher
 from config_forage.search.random import RandomSearcher
-from helpers import OPT_SCORE, OPTIMUM, SyntheticObjective, empty_space, synthetic_space
+from helpers import OPT_SCORE, OPTIMUM, SyntheticObjective, empty_space, synthetic_score, synthetic_space
 
 
 def run(searcher, budget, seed, **kw):
@@ -110,7 +110,7 @@ def test_observe_hook_called_per_generation():
     BsaSearcher(sp, biasers=[spy], workers=1).search(obj, 32, 0)
     assert len(spy.seen) == 2 and all(len(g) == 16 for g in spy.seen)
     d, r = spy.seen[0][0]
-    assert r.score == obj.score_fn(sp.config(d))
+    assert r.score == obj.score_fn(sp.knob_values(d))
 
 
 def test_value_at():
@@ -124,7 +124,7 @@ def test_synthetic_optimum_unique_and_coordinatewise_trap():
 
     from helpers import synthetic_score
     sp = synthetic_space()
-    scores = sorted((synthetic_score(sp.config(d)), d) for d in product(range(6), repeat=4))
+    scores = sorted((synthetic_score(sp.knob_values(d)), d) for d in product(range(6), repeat=4))
     assert scores[0][0] == OPT_SCORE < scores[1][0] and sp.config(scores[0][1]) == {**OPTIMUM, "num_instances": 8}
     trap = {"a": 0, "b": 0, "c": 3, "d": 2}
     for k in "ab":
@@ -144,3 +144,20 @@ def test_seeded_trace_independent_of_thread_timing():
 
     a, b = (BsaSearcher(sp, workers=4).search(Jittery(sp), 80, 3) for _ in range(2))
     assert a.points == b.points and a.extra["history"] == b.extra["history"]
+
+
+def test_trace_points_record_each_evaluation_and_roundtrip():
+    sp = synthetic_space()
+    t = BsaSearcher(sp, workers=1).search(SyntheticObjective(sp), 20, 0)
+    for p in t.points:
+        assert isinstance(p.decision, list) and p.score == synthetic_score(sp.knob_values(tuple(p.decision)))
+    assert all(p.best_score == min(q.score for q in t.points[:i + 1]) for i, p in enumerate(t.points))
+    assert Trace.from_json(t.to_json()).points == t.points
+
+
+def test_trace_from_old_json_lacking_decision_and_score():
+    import json
+    old = {"points": [{"runs": 1, "best_score": -1.0, "best_config": {"a": 1}, "evaluated": 1}],
+           "method": "x", "seed": 0, "extra": {}}
+    (p,) = Trace.from_json(json.dumps(old)).points
+    assert p.decision is None and p.score is None and p.best_score == -1.0

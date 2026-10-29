@@ -67,7 +67,13 @@ class KnobSpace:
             raise ValueError(f"duplicate knob names in {names}")
         if "num_instances" in names:
             raise ValueError("num_instances is derived, not a knob")
+        topology = ("tp", "dp", "enable_expert_parallel")  # = feasibility.TOPOLOGY (no import cycle)
         for i, k in enumerate(self.knobs):
+            labels = [str(v) for v in k.values]
+            if len(set(labels)) != len(labels):
+                raise ValueError(f"knob {k.name}: option labels {labels} are not unique (str of each value)")
+            if k.requires is not None and k.name in topology:
+                raise ValueError(f"knob {k.name}: a topology knob cannot be conditional (requires)")
             if k.requires is not None:
                 if k.requires[0] not in names[:i]:
                     raise ValueError(f"knob {k.name}: requires an earlier knob, not {k.requires[0]!r}")
@@ -86,10 +92,20 @@ class KnobSpace:
     def n_combinations(self) -> int:
         return math.prod(len(k.values) for k in self.knobs)
 
+    def knob_values(self, d: Decision) -> dict:
+        """The decision's labelled knob values, typed (no num_instances); defined for any decision."""
+        return {k.name: k.values[i] for k, i in zip(self.knobs, d) if i is not None}
+
     def config(self, d: Decision) -> dict:
-        """Typed config of a decision; unlabelled axes are omitted, num_instances is derived."""
-        c = {k.name: k.values[i] for k, i in zip(self.knobs, d) if i is not None}
-        c["num_instances"] = self.scenario.gpu_budget // (c.get("tp", 1) * c.get("dp", 1))
+        """Typed config of a decision; unlabelled axes are omitted, num_instances is derived.
+        Raises ValueError when the instance width tp·dp exceeds the GPU budget (num_instances 0):
+        check `is_feasible(knob_values(d), scenario)` first for a decision that may be infeasible."""
+        c = self.knob_values(d)
+        width = c.get("tp", 1) * c.get("dp", 1)
+        c["num_instances"] = self.scenario.gpu_budget // width
+        if c["num_instances"] == 0:
+            raise ValueError(f"num_instances 0: width tp·dp = {width} exceeds the GPU budget "
+                             f"{self.scenario.gpu_budget}")
         return c
 
     def decision(self, config: dict) -> Decision:

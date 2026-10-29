@@ -26,7 +26,7 @@ def test_config_derives_num_instances():
 def test_conditional_knob_unlabelled():
     sp = load_space(TINY)
     d = sp.decision({"tp": 1, "dp": 1, "enable_expert_parallel": False, "max_num_seqs": 64, "speculative": False})
-    assert d[-1] is None and "num_speculative_tokens" not in sp.config(d)
+    assert d[-1] is None and "num_speculative_tokens" not in sp.knob_values(d)
 
 
 def test_default_config():
@@ -54,3 +54,27 @@ def test_slo_passes():
     assert not s.passes({"itl_p99_ms": 21, "ttft_p99_ms": 400})
     assert not s.passes({"itl_p99_ms": 10})  # missing required metric
     assert Slo().passes({"itl_p99_ms": 5}) and not Slo().passes({})
+
+
+def test_config_rejects_zero_instances():
+    sc = load_space(TINY).scenario  # budget 16
+    sp = KnobSpace(sc, (Knob("tp", (8,)), Knob("dp", (4,))))
+    with pytest.raises(ValueError, match="num_instances"):
+        sp.config((0, 0))
+    assert sp.knob_values((0, 0)) == {"tp": 8, "dp": 4}
+
+
+def test_topology_knobs_cannot_be_conditional():
+    sc = load_space(TINY).scenario
+    for name in ("tp", "dp", "enable_expert_parallel"):
+        with pytest.raises(ValueError, match="topology"):
+            KnobSpace(sc, (Knob("x", (0, 1)), Knob(name, (1, 2) if name != "enable_expert_parallel" else (False, True),
+                                                   requires=("x", (1,)))))
+
+
+def test_option_labels_must_be_unique():
+    sc = load_space(TINY).scenario
+    with pytest.raises(ValueError, match="label"):
+        KnobSpace(sc, (Knob("x", (1, "1")),))
+    with pytest.raises(ValueError, match="label"):
+        KnobSpace(sc, (Knob("x", (1, 1)),))

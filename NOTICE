@@ -1,0 +1,17 @@
+config-forage
+Copyright 2026 Asser Tantawi
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product includes software from inference-sim/blis-config-search
+(https://github.com/inference-sim/blis-config-search), licensed under the Apache License,
+Version 2.0, at commit 1a6dc6fa89b7c3569b409b9b5c92143267dd80ad:
+
+  - config_forage/blis/run_blis.py: vendored unchanged from
+    .claude/skills/config-search/scripts/run_blis.py (an attribution line is prepended).
+  - The topology and feasibility rules in config_forage/feasibility.py (one instance per node,
+    tp·dp·num_instances = GPU budget, dense models take no dp or expert parallelism, expert
+    parallelism needs width > 1, tp must divide the KV heads) follow its topologies.py.
+  - The concurrency ladder in config_forage/probe.py (ladder) and the requests-per-probe rule in
+    config_forage/blis/runner.py (requests_for) follow its run_search.py, and the incumbent
+    baseline in config_forage/search/coord.py ports its coordinate-search heuristic.

@@ -2,7 +2,7 @@
 
 ## 2026-10-28 — Real BLIS: setup, S-mid, sensitivity, cost, incumbent
 
-**Setup and pins.** `scripts/setup_blis.sh ~/Projects/github/blis-stack` (idempotent; verifies the
+**Setup and pins.** `scripts/setup_blis.sh ../blis-stack` (idempotent; verifies the
 SHA and tags): inference-sim v0.10.0 @ 0d092d4ef64f605046de1181adf8e2b6ee564725 (kernel v0.1.0),
 blis-catalog 0.2.1 @ 28e82d4, blis-registry v0.1.1 @ f7519b1, engine_version 0.29.0. Smoke test
 `uv run pytest -m blis` passes (tp8 + EP, 2 instances, c = 8; one probe). One BLIS run ≈ 0.17 s.
@@ -22,8 +22,8 @@ BLIS's memory model; the other 11 rule-feasible topologies fail at c = 1, so 1,8
 tps/GPU. Topology dominates (37.9–89.0 across width-8 shapes), then routing_policy (4–38%; its best
 value depends on topology), then EP (0–10.5%). **Under 1% everywhere: max_num_seqs, cache_dtype,
 gpu_memory_utilization** (C* ≤ 32, so neither the batch cap nor KV memory binds).
-max_num_batched_tokens is flat at the default but moves 4.6% at tp4·dp2 without EP — an
-interaction-only axis, kept.
+max_num_batched_tokens is flat over 2048–32768 at the default but moves 4.6% at tp4·dp2 without EP —
+an interaction-only axis, kept (v2's added value 1024 costs 2.8% at the default).
 
 **Cost.** Measured on 300 random configs at 9 workers: 4.66 unique runs/config, 0.091 s/config →
 full grid ≈ 21k runs, **≈ 7 min**.
@@ -62,3 +62,76 @@ preemption_policy and admission_policy are exact ties everywhere.
 
 Takeaway: on this scenario, topology × routing is nearly all the signal. A method beats the
 incumbent here only on exact optimality (< 0.25% regret) or on runs to within 1% (< 203).
+
+## 2026-10-28 — Final review findings
+
+The final review of the build branch found three problems that invalidate the first S-mid v2
+benchmark (`results/s-mid2/runs`, `results/s-mid2/analysis`). **That benchmark is superseded and must
+be rerun, grid included, after these fixes.**
+
+**C1. The uniform `bsa` arm scored configs outside the grid, giving negative regret.** `is_feasible`
+applies upstream's one-node rule (tp·dp ≤ 8), so the grid leaves out wider instances. But the
+objective never checked feasibility, and BLIS prices multi-node instances (here via the inter-node
+fabric). The no-biaser arm sampled tp4·dp4+EP (one 16-GPU instance over two nodes), scored −100.5 to
+−101.7, about 7% better than the grid optimum −95.14, and its median regret came out at −5.35. Fix: the
+space stays as defined (one instance per node). `Objective` now returns a failure for a rule-infeasible
+config without calling BLIS and charges it one run (a synthetic `infeasible:` key, so the same config
+costs 1 once). That mirrors BLIS rejecting it at c = 1, so an arm without the feasibility biaser gets
+no free feasibility information. `KnobSpace.config` refuses width > budget (num_instances 0), and
+cf-analyze raises if a trace beats the grid optimum. Whether multi-node instances should enter the
+space is an open question for the user.
+
+**C2. C\* was censored at the ladder top.** `ladder(16)` stops at c = 32, and a config that passed
+every rung got C\* = 32. 844 grid configs never failed, among them the optimum and the whole 1%
+plateau, so the top of the ranking compared capped values. Fix: when every rung passes, the probe keeps
+doubling c (64, 128, …) to the first failure, capped at 4096, then bisects as before;
+`diagnostics["c_star_censored"]` marks a config that passes at 4096. The scores of the top configs
+change, so the grid, the optimum and every method's regret need a rerun.
+
+**I1. `bsa-diag` was inert on S-mid v2.** Its rule knobs (gpu_memory_utilization, cache_dtype,
+max_num_seqs) are single-valued there, and the max_num_batched_tokens rule needs a TTFT SLO that the
+scenario does not set. Its factors stayed all ones, and its traces equalled `bsa-feas`'s seed for seed.
+`DiagnosticBiaser.active_rules()` now reports the rules that can act; cf-bench records them per arm in
+the manifest and warns when there are none; cf-analyze flags arms with identical traces.
+(`docs/experiments/s-mid-grid.md`, "The diagnostic arm is inert on S-mid v2".)
+
+Also fixed: TPE's pruned trials are reported under both cost conventions (a "tpe (pruned = 1 run)"
+row); trace points carry each evaluation's decision and score, `cf-analyze --heldout N` rescores the
+top configs on seeds 1–3, and the table shows the share of seeds within 0.5% of the optimum.
+
+**Rerun (S-mid v2, after the fixes)** (results/s-mid3; grid 4,608 configs all scored, 0 censored,
+3 min at 9 workers; benchmark 8 methods × 10 seeds, B = 1000; the grid had already run every config,
+so the benchmark needed no new BLIS runs).
+
+- **The capped probe had the wrong optimum.** With C* free to rise above 32, the optimum is
+  −132.50 tok/s/GPU at 2 × tp2·dp4 + EP, least-loaded routing, max_num_batched_tokens 4096,
+  block 16, C* = 61. The capped grid said −95.14 at tp4·dp2, which is 39% lower and a different
+  topology. All 48 configs within 0.5% have C* = 61; 112 are within 1%.
+- **Results** (regret = best − optimum in tok/s/GPU; median over 10 seeds):
+
+  | method | regret B=200 | regret B=1000 | runs to 1% | seeds within 0.5% at 1000 |
+  |---|---|---|---|---|
+  | bsa-feas | 14.2 | 0 | 322 | 10/10 |
+  | smac | 20.8 | 0 | 308 | 8/10 |
+  | random (feasible) | 14.2 | 0 | 403 (1 censored) | 7/10 |
+  | tpe | 29.2 | 0 | 352 (4 censored) | 6/10 |
+  | tpe, pruned = 1 run | 29.2 | 0 | 378 (4 censored) | 6/10 |
+  | bsa (no biasers) | 28.6 | 14.9 | 732 (5 censored) | 5/10 |
+  | incumbent (deterministic) | 25.5 | 1.11 | 235 | 0/10 |
+  | coord-ascent | 66.2 | 66.2 | never | 0/10 |
+
+- **Reading.**
+  - The upstream incumbent reaches 1% fastest (235 runs), then stops at 0.84% regret. It never
+    finds the optimum, because it changes one knob at a time on the best 3 topologies.
+  - BSA with the feasibility biaser is the only method within 0.5% on every seed. SMAC is the
+    closest rival.
+  - No difference between the guided methods is significant at n = 10 (bsa-feas vs tpe:
+    p = 0.125 at B = 1000).
+  - Feasibility is the one bias that clearly helps: plain BSA, which pays 1 run per infeasible
+    sample, is the worst of the samplers.
+  - The diagnostic arm is inert in this space. Its rule knobs are pinned, and no TTFT SLO is set.
+- **What this does and does not show.** S-mid v2 is a 4.6k-config space: the full grid costs
+  ~48k runs, so at B = 1000 all the guided methods approach the optimum. This is a sanity check,
+  not the large-space claim. The claim needs S-large (4.6 × 10⁷ configs), where there is no grid
+  and the methods are compared on best-found. It also needs a space where the diagnostic rules
+  have live knobs.

@@ -69,9 +69,12 @@ def test_bench_resumes_and_builds_fresh_arms(setup):
         run.bench(sp, runner, ["bsa-diag"], [0], 50, tmp / "runs")
     with pytest.raises(ValueError, match="transfer_from"):
         run.bench(sp, runner, ["bsa-transfer"], [0], 40, tmp / "runs")
-    t = run.bench(sp, runner, ["bsa-transfer"], [0], 40, tmp / "runs",
-                  opts={"transfer_from": tmp / "runs" / "bsa-diag" / "seed-0.json"})
+    src = {"transfer_from": tmp / "runs" / "bsa-diag" / "seed-0.json"}
+    with pytest.raises(ValueError, match="opts"):  # resuming with other options would mix runs
+        run.bench(sp, runner, ["bsa-transfer"], [0], 40, tmp / "runs", opts=src)
+    t = run.bench(sp, runner, ["bsa-transfer"], [0], 40, tmp / "runs-t", opts=src)
     assert t[0].method == "bsa-transfer"
+    assert run.bench(sp, runner, ["bsa-transfer"], [0], 40, tmp / "runs-t", opts=src, jobs=2) == []
 
 
 def test_parse_seeds():
@@ -86,8 +89,8 @@ def test_trace_value_at_budget():
 
 def test_runs_to_within_negative_scores():
     t = trace([(10, None), (20, -90.0), (35, -99.5), (50, -100.0)])
-    assert analyze.runs_to_within(t, -100.0) == 35  # -99.5 <= -100 + 1
-    assert analyze.runs_to_within(t, -100.0, tol=0.001) == 50
+    assert analyze.runs_to_within(t, -100.0, 1000) == 35  # -99.5 <= -100 + 1
+    assert analyze.runs_to_within(t, -100.0, 1000, tol=0.001) == 50
 
 
 def test_runs_to_within_ignores_points_past_budget():
@@ -105,7 +108,7 @@ def test_bench_caps_workers_under_jobs(setup, monkeypatch):
 
 
 def test_runs_to_within_censored():
-    assert analyze.runs_to_within(trace([(10, None), (20, -90.0)]), -100.0) is None
+    assert analyze.runs_to_within(trace([(10, None), (20, -90.0)]), -100.0, 1000) is None
 
 
 def test_regret_table_shapes():
@@ -144,3 +147,120 @@ def test_analyze_writes_outputs(setup):
     assert "random" in md and "vs bsa" in md
     analyze.main([str(tmp / "runs"), "--out", str(tmp / "out2")])  # no grid: best-found
     assert (tmp / "out2" / "table.md").exists() and not (tmp / "out2" / "runs_to_1pct.png").exists()
+
+
+def test_analyze_fails_loudly_below_grid_optimum(setup):
+    sp, runner, tmp = setup
+    grid.grid(sp, runner, tmp / "grid.jsonl", workers=4, log=None)
+    opt = analyze.optimum(analyze.load_grid(tmp / "grid.jsonl"))
+    d = tmp / "runs" / "m"
+    d.mkdir(parents=True)
+    (d / "seed-0.json").write_text(trace([(5, opt * 1.01)]).to_json())
+    with pytest.raises(ValueError, match="below the grid optimum"):
+        analyze.analyze(tmp / "runs", tmp / "out", tmp / "grid.jsonl")
+    (d / "seed-0.json").write_text(trace([(5, opt * (1 + 1e-12))]).to_json())  # within 1e-9·|opt|
+    analyze.analyze(tmp / "runs", tmp / "out", tmp / "grid.jsonl")
+
+
+def test_bench_manifest_records_active_rules(setup, capsys):
+    sp, runner, tmp = setup  # tiny space: max_num_seqs has 3 values, no TTFT SLO
+    run.bench(sp, runner, ["bsa-diag", "random"], [0], 20, tmp / "runs")
+    m = json.loads((tmp / "runs" / "manifest.json").read_text())
+    assert m["active_rules"] == {"bsa-diag": [{"signal": "kv_starved", "knob": "max_num_seqs", "prefer": "lower"},
+                                              {"signal": "itl", "knob": "max_num_seqs", "prefer": "lower"}]}
+    assert "no active" not in capsys.readouterr().err
+    pinned = load_space(TINY)
+    from config_forage.space import Knob, KnobSpace
+    pinned = KnobSpace(pinned.scenario, tuple(Knob(k.name, k.values[:1]) if k.name == "max_num_seqs" else k
+                                              for k in pinned.knobs))
+    run.bench(pinned, runner, ["bsa-diag"], [0], 20, tmp / "runs2")
+    assert "bsa-diag: no active diagnostic rule" in capsys.readouterr().err
+    assert json.loads((tmp / "runs2" / "manifest.json").read_text())["active_rules"] == {"bsa-diag": []}
+
+
+def test_analyze_flags_identical_arms(setup):
+    _, _, tmp = setup
+    for m in ("a", "b", "c"):
+        (tmp / "runs" / m).mkdir(parents=True)
+        for s in (0, 1):
+            pts = [(5, -1.0 - s), (9, -2.0)] if m != "c" else [(5, -1.0), (8, -2.0)]
+            (tmp / "runs" / m / f"seed-{s}.json").write_text(trace(pts, m, s).to_json())
+    assert analyze.identical_arms(analyze.load_traces(tmp / "runs")) == [("a", "b")]
+    md = analyze.analyze(tmp / "runs", tmp / "out")
+    assert "Identical arms" in md and "a, b" in md
+
+
+def test_heldout_rescoring_with_fake_runner(setup):
+    sp, runner, tmp = setup
+    run.bench(sp, runner, ["bsa-feas", "random"], [0, 1], 40, tmp / "runs")
+    rows = analyze.heldout(tmp / "runs", tmp / "out", 3, runner, sp)
+    assert {r["method"] for r in rows} == {"bsa-feas", "random"}
+    for m in ("bsa-feas", "random"):
+        mine = [r for r in rows if r["method"] == m]
+        assert len(mine) == 3 and len({json.dumps(r["config"], sort_keys=True) for r in mine}) == 3
+        assert [r["search_score"] for r in mine] == sorted(r["search_score"] for r in mine)
+        assert all(len(r["scores"]) == 3 for r in mine)
+        # fake_blis scales throughput by (1 + 0.01·seed): held-out seeds 1..3 score better than seed 0
+        assert all(r["mean"] < r["search_score"] for r in mine)
+    md = (tmp / "out" / "heldout.md").read_text()
+    assert "bsa-feas" in md and "seeds (1, 2, 3)" in md and "within 0.5%" in md
+
+
+def test_table_tie_column_and_paired_n(setup):
+    _, _, tmp = setup
+    (tmp / "g.jsonl").write_text(json.dumps({"decision": [0], "config": {}, "score": -100.0}) + "\n")
+    for m, finals in (("a", [-100.0, -99.6, -99.0, -90.0]), ("bsa", [-100.0] * 3)):
+        (tmp / "runs" / m).mkdir(parents=True)
+        for s, v in enumerate(finals):
+            (tmp / "runs" / m / f"seed-{s}.json").write_text(trace([(5, -50.0), (10, v)], m, s).to_json())
+    md = analyze.analyze(tmp / "runs", tmp / "out", tmp / "g.jsonl", budgets=(10,))
+    assert "% seeds within 0.5% at B=10" in md
+    row = next(line for line in md.splitlines() if line.startswith("| a |"))
+    assert "| 50% |" in row  # -100 and -99.6 are within 0.5%; -99 and -90 are not
+    assert "| n |" in md and "| a | 3 |" in md.split("Wilcoxon")[1]  # paired over the 3 common seeds
+
+
+def test_wilcoxon_empty_pairing_is_nan():
+    import math
+    assert math.isnan(analyze.wilcoxon([], []))
+
+
+def test_runs_to_within_requires_budget():
+    with pytest.raises(TypeError):
+        analyze.runs_to_within(trace([(1, -1.0)]), -1.0)
+
+
+def test_pruned_as_one_run_reindex():
+    t = trace([(2, -1.0), (4, -2.0), (4, -2.0), (7, -3.0)], "tpe")
+    t.extra.update({"pruned_at": [0, 4, 4, 7], "pruned_after": [0, 2, 2, 4]})
+    r = analyze.pruned_as_one_run(t)
+    assert r.method == "tpe (pruned = 1 run)" and r.seed == t.seed
+    assert [p.runs for p in r.points] == [3, 5, 7, 10]  # +1 before all; +2 after the 2nd point
+    assert [p.best_score for p in r.points] == [p.best_score for p in t.points]
+    old = trace([(2, -1.0), (5, -2.0)], "tpe")
+    old.extra["pruned_at"] = [2, 3]  # no pruned_after: a prune at runs q precedes points with runs > q
+    assert [p.runs for p in analyze.pruned_as_one_run(old).points] == [2, 7]
+
+
+def test_analyze_adds_tpe_pruned_row(setup):
+    _, _, tmp = setup
+    (tmp / "g.jsonl").write_text(json.dumps({"decision": [0], "config": {}, "score": -100.0}) + "\n")
+    (tmp / "runs" / "tpe").mkdir(parents=True)
+    for s in range(2):
+        t = trace([(5, -90.0), (10, -100.0)], "tpe", s)
+        t.extra.update({"pruned_at": [5] * 6, "pruned_after": [1] * 6})
+        (tmp / "runs" / "tpe" / f"seed-{s}.json").write_text(t.to_json())
+    md = analyze.analyze(tmp / "runs", tmp / "out", tmp / "g.jsonl", budgets=(10,))
+    row = next(line for line in md.splitlines() if line.startswith("| tpe (pruned = 1 run) |"))
+    assert "| 10 [10, 10] |" in row  # at B=10 the re-indexed trace (runs 16) has only -90: regret 10
+
+
+def test_manifest_counts_timeouts_per_call(setup):
+    sp, _, tmp = setup
+    r = CachedRunner(None, sp.scenario, tmp / "c2",
+                     run_fn=lambda cfg, c, s: {**fake_blis(cfg, c, s), "returncode": -1 if c == 64 else 0})
+    run.bench(sp, r, ["random"], [0], 20, tmp / "runs")
+    run.bench(sp, r, ["random"], [1], 20, tmp / "runs")
+    calls = json.loads((tmp / "runs" / "manifest.json").read_text())["calls"]
+    assert len(calls) == 2 and all({"new_traces", "unique_runs", "cache_hits", "timeouts"} <= set(c) for c in calls)
+    assert calls[0]["new_traces"] == 1 and calls[0]["timeouts"] > 0

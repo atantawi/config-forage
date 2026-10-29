@@ -2,7 +2,11 @@
 
 Scores are negative (-tokens/s per GPU), lower is better; optimum = min grid score. Regret at budget
 B = trace.value_at(B) - optimum >= 0, read at the last trace point with runs <= B; a trace with no
-success by B counts as score 0 (regret |optimum|) and is tallied in n_none."""
+success by B counts as score 0 (regret |optimum|) and is tallied in n_none.
+
+TPE traces also appear re-indexed as "tpe (pruned = 1 run)": the other cost convention, where each
+pruned (infeasible) suggestion costs one run. --heldout N rescores each method's top N distinct
+configs on held-out workload seeds (needs the BLIS environment)."""
 
 from __future__ import annotations
 
@@ -15,9 +19,12 @@ from pathlib import Path
 import numpy as np
 
 from config_forage.probe import probe
-from config_forage.search.base import Trace
+from config_forage.search.base import Trace, TracePoint
 
 BUDGETS = (50, 100, 200, 500, 1000)
+TIE_TOL = 0.005  # upstream's tie tolerance: within 0.5% of the optimum counts as a tie
+HELDOUT_SEEDS = (1, 2, 3)
+PRUNED_SUFFIX = " (pruned = 1 run)"
 
 
 def load_traces(d: str | Path) -> list[Trace]:
@@ -44,12 +51,22 @@ def optimum(rows: Sequence[dict]) -> float:
     return min(scores)
 
 
-def runs_to_within(trace: Trace, optimum: float, tol: float = 0.01, budget: int | None = None) -> int | None:
+def check_not_below(traces: Sequence[Trace], optimum: float) -> None:
+    """Raise if any trace's best is below the grid optimum by more than 1e-9·|optimum|: the trace
+    then scored a config the grid does not contain (a feasibility leak), and regret is meaningless."""
+    bad = [(t.method, t.seed, p.best_score) for t in traces for p in t.points[-1:]
+           if p.best_score is not None and p.best_score < optimum - 1e-9 * abs(optimum)]
+    if bad:
+        raise ValueError(f"trace best below the grid optimum {optimum!r} (a config outside the grid's "
+                         f"feasible space was scored): {bad[:5]}{' ...' if len(bad) > 5 else ''}")
+
+
+def runs_to_within(trace: Trace, optimum: float, budget: int, tol: float = 0.01) -> int | None:
     """Runs at the first point whose best score is within tol·|optimum| of the optimum; None if no
     point with runs <= budget gets there (points a batch overshot past the budget never count)."""
     bound = optimum + tol * abs(optimum)
     for p in trace.points:
-        if budget is not None and p.runs > budget:
+        if p.runs > budget:
             return None
         if p.best_score is not None and p.best_score <= bound:
             return p.runs
@@ -61,6 +78,14 @@ def _by_method(traces: Sequence[Trace]) -> dict[str, list[Trace]]:
     for t in traces:
         out[t.method].append(t)
     return dict(out)
+
+
+def identical_arms(traces: Sequence[Trace]) -> list[tuple[str, str]]:
+    """Pairs of methods (sorted) whose traces are identical seed for seed (same seeds, same points):
+    an arm whose biaser never acted, say. The trace's extra (e.g. BSA history) is not compared."""
+    by = {m: {t.seed: t.points for t in ts} for m, ts in _by_method(traces).items()}
+    ms = sorted(by)
+    return [(a, b) for i, a in enumerate(ms) for b in ms[i + 1:] if by[a] == by[b]]
 
 
 def _summary(xs: Sequence[float], n_none: int) -> dict:
@@ -97,7 +122,7 @@ def best_table(traces: Sequence[Trace], budgets: Sequence[int] = BUDGETS) -> dic
 
 def wilcoxon(a: Sequence[float | None], b: Sequence[float | None], budget: int | None = None) -> float:
     """Two-sided paired Wilcoxon p-value (zero_method="zsplit"); None entries (censored
-    runs-to-within) become budget + 1. 1.0 if every difference is zero."""
+    runs-to-within) become budget + 1. 1.0 if every difference is zero; NaN for an empty pairing."""
     from scipy.stats import wilcoxon as _w
 
     def fill(xs):
@@ -108,6 +133,8 @@ def wilcoxon(a: Sequence[float | None], b: Sequence[float | None], budget: int |
     x, y = fill(a), fill(b)
     if len(x) != len(y):
         raise ValueError(f"unpaired samples: {len(x)} vs {len(y)}")
+    if len(x) == 0:
+        return float("nan")
     if not np.any(x - y):
         return 1.0
     return float(_w(x, y, zero_method="zsplit", alternative="two-sided").pvalue)
@@ -121,6 +148,70 @@ def rescore_heldout(top_configs: Sequence[dict], runner, seeds: Sequence[int] = 
         ok = [s for s in scores if s is not None]
         out.append({"config": cfg, "scores": scores, "mean": float(np.mean(ok)) if ok else None})
     return out
+
+
+def pruned_as_one_run(trace: Trace) -> Trace:
+    """A TPE trace under the other cost convention: every pruned trial adds 1 to the runs of all
+    later points. Uses extra["pruned_after"] (points recorded before each prune); without it, a
+    prune at runs_used q is taken to precede the points with runs > q."""
+    after = trace.extra.get("pruned_after")
+    at = trace.extra.get("pruned_at", [])
+    pts = []
+    for i, p in enumerate(trace.points):
+        k = sum(a <= i for a in after) if after is not None else sum(q < p.runs for q in at)
+        pts.append(TracePoint(p.runs + k, p.best_score, p.best_config, p.evaluated, p.decision, p.score))
+    return Trace(pts, trace.method + PRUNED_SUFFIX, trace.seed, {"derived_from": trace.method})
+
+
+def with_pruned_rows(traces: Sequence[Trace]) -> list[Trace]:
+    """traces plus a re-indexed copy of each trace that logged prunes (TPE)."""
+    return [*traces, *(pruned_as_one_run(t) for t in traces if "pruned_at" in t.extra)]
+
+
+def top_configs(ts: Sequence[Trace], n: int, space) -> list[tuple[float, dict]]:
+    """A method's n best distinct successful configs across its seeds, (search score, config), best
+    first. Traces from before per-evaluation records fall back to their best_config points."""
+    best: dict[str, tuple[float, dict]] = {}
+    for t in ts:
+        cands = t.top_configs(len(t.points), space) if any(p.decision is not None for p in t.points) else \
+            [(p.best_score, p.best_config) for p in t.points if p.best_score is not None and p.best_config]
+        for s, cfg in cands:
+            k = json.dumps(cfg, sort_keys=True, default=str)
+            if k not in best or s < best[k][0]:
+                best[k] = (s, cfg)
+    return sorted(best.values(), key=lambda x: x[0])[:n]
+
+
+def heldout(runs_dir: Path, out: Path, n: int, runner, space, seeds: Sequence[int] = HELDOUT_SEEDS) -> list[dict]:
+    """Rescore each method's top-n distinct configs on held-out workload seeds; write heldout.md.
+    Rows: {method, config, search_score, scores, mean}. A mean within 0.5% of the best mean over
+    all methods is marked a tie."""
+    by = _by_method(load_traces(runs_dir))
+    rows = []
+    for m in sorted(by):
+        top = top_configs(by[m], n, space)
+        for (s, _), r in zip(top, rescore_heldout([c for _, c in top], runner, seeds)):
+            rows.append({"method": m, "search_score": s, **r})
+    means = [r["mean"] for r in rows if r["mean"] is not None]
+    best = min(means) if means else None
+    lines = [f"# Held-out rescoring: top {n} distinct configs per method, seeds {tuple(seeds)}", "",
+             "Score = -tokens/s per GPU (lower is better); mean over the held-out seeds that succeed. "
+             f"tie = held-out mean within 0.5% of the best held-out mean ({best:.6g})." if best is not None
+             else "No config succeeded on the held-out seeds.", "",
+             "| method | rank | search score | held-out mean | held-out scores | tie | config |",
+             "|---|---|---|---|---|---|---|"]
+    rank: dict[str, int] = defaultdict(int)
+    for r in rows:
+        rank[r["method"]] += 1
+        tie = best is not None and r["mean"] is not None and r["mean"] <= best + TIE_TOL * abs(best)
+        sc = ", ".join("fail" if x is None else f"{x:.6g}" for x in r["scores"])
+        mean = "fail" if r["mean"] is None else f"{r['mean']:.6g}"
+        cfg = json.dumps(r["config"], default=str)
+        lines.append(f"| {r['method']} | {rank[r['method']]} | {r['search_score']:.6g} | {mean} | {sc} | "
+                     f"{'tie' if tie else ''} | `{cfg}` |")
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "heldout.md").write_text("\n".join(lines) + "\n")
+    return rows
 
 
 def _paired(ts_a: list[Trace], ts_b: list[Trace], f) -> tuple[list, list]:
@@ -159,7 +250,7 @@ def _plot_runs_to(by: dict[str, list[Trace]], opt: float, budget: int, path: Pat
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     names = sorted(by)
-    data = [[budget + 1 if (r := runs_to_within(t, opt, budget=budget)) is None else r for t in by[m]] for m in names]
+    data = [[budget + 1 if (r := runs_to_within(t, opt, budget)) is None else r for t in by[m]] for m in names]
     fig, ax = plt.subplots(figsize=(7, 4.5))
     ax.boxplot(data, showfliers=False)
     rng = np.random.default_rng(0)
@@ -175,12 +266,13 @@ def _plot_runs_to(by: dict[str, list[Trace]], opt: float, budget: int, path: Pat
 
 def analyze(runs_dir: Path, out: Path, grid_path: Path | None = None, budgets: Sequence[int] = BUDGETS) -> str:
     """Write regret.png (best found without a grid), runs_to_1pct.png (grid only) and table.md."""
-    traces = load_traces(runs_dir)
-    if not traces:
+    raw = load_traces(runs_dir)
+    if not raw:
         raise ValueError(f"no traces under {runs_dir}")
     mpath = Path(runs_dir) / "manifest.json"
     budget = (json.loads(mpath.read_text()).get("budget") if mpath.exists() else None) or \
-        max(p.runs for t in traces for p in t.points)
+        max(p.runs for t in raw for p in t.points)
+    traces = with_pruned_rows(raw)
     by = _by_method(traces)
     out.mkdir(parents=True, exist_ok=True)
     budgets = [b for b in budgets if b <= budget] or [budget]
@@ -188,6 +280,7 @@ def analyze(runs_dir: Path, out: Path, grid_path: Path | None = None, budgets: S
     refs = [r for r in ("bsa", "tpe") if r in by]
     if grid_path is not None:
         opt = optimum(load_grid(grid_path))
+        check_not_below(raw, opt)
         tab = regret_table(traces, opt, budgets)
         lines += [(f"Grid optimum: {opt:.6g} (score = -tokens/s per GPU). Regret = best - optimum, "
                    f"median [IQR] over seeds; no success counts as regret {abs(opt):.6g}."), ""]
@@ -207,28 +300,42 @@ def analyze(runs_dir: Path, out: Path, grid_path: Path | None = None, budgets: S
             return 0.0 if v is None else v
 
         _plot_curves(by, val, "best score (-tokens/s per GPU)", out / "regret.png", budget)
+    same = identical_arms(raw)
+    if same:
+        lines += ["**Identical arms** (traces equal seed for seed, so they are one arm here): "
+                  + "; ".join(f"{a}, {b}" for a, b in same) + ".", ""]
+    if "incumbent" in by:
+        lines += ["incumbent is deterministic (the seed is ignored): its seeds are copies of one trace, so its "
+                  "n carries no extra information (zero IQR; a Wilcoxon test against it pairs one value n times).", ""]
+    if any(m.endswith(PRUNED_SUFFIX) for m in by):
+        lines += [f"tpe{PRUNED_SUFFIX}: the TPE traces re-indexed so that each pruned (infeasible) suggestion "
+                  "costs one run; plain tpe counts them free.", ""]
     head = "| method | seeds | " + " | ".join(f"B={b}" for b in budgets)
-    head += " | runs to 1% |" if grid_path is not None else " |"
+    head += f" | runs to 1% | % seeds within 0.5% at B={budgets[-1]} |" if grid_path is not None else " |"
     lines += [head, "|" + "---|" * (head.count("|") - 1)]
     for m in sorted(by):
         row = f"| {m} | {len(by[m])} | " + " | ".join(_fmt(tab[m][b]) for b in budgets)
         if grid_path is not None:
-            rt = [runs_to_within(t, opt, budget=budget) for t in by[m]]
+            rt = [runs_to_within(t, opt, budget) for t in by[m]]
             c = _summary([budget + 1 if r is None else r for r in rt], sum(r is None for r in rt))
             row += f" | {c['median']:.0f} [{c['q1']:.0f}, {c['q3']:.0f}]" + \
                 (f" ({c['n_none']} censored)" if c["n_none"] else "")
+            vs = [t.value_at(budgets[-1]) for t in by[m]]
+            tie = sum(v is not None and v <= opt + TIE_TOL * abs(opt) for v in vs) / len(vs)
+            row += f" | {100 * tie:.0f}%"
         lines.append(row + " |")
     for ref in refs:
         lines += ["", f"## Wilcoxon p-values vs {ref} (two-sided, paired by seed)", ""]
         cols = [f"B={budgets[-1]}"] + (["runs to 1%"] if grid_path is not None else [])
-        lines += ["| method | " + " | ".join(cols) + " |", "|---|" + "---|" * len(cols)]
+        lines += ["| method | n | " + " | ".join(cols) + " |", "|---|---|" + "---|" * len(cols)]
         for m in sorted(by):
             if m == ref:
                 continue
-            ps = [wilcoxon(*_paired(by[m], by[ref], lambda t: val(t, budgets[-1])))]
+            pair = _paired(by[m], by[ref], lambda t: val(t, budgets[-1]))
+            ps = [wilcoxon(*pair)]
             if grid_path is not None:
-                ps.append(wilcoxon(*_paired(by[m], by[ref], lambda t: runs_to_within(t, opt, budget=budget)), budget=budget))
-            lines.append(f"| {m} | " + " | ".join(f"{p:.3g}" for p in ps) + " |")
+                ps.append(wilcoxon(*_paired(by[m], by[ref], lambda t: runs_to_within(t, opt, budget)), budget=budget))
+            lines.append(f"| {m} | {len(pair[0])} | " + " | ".join(f"{p:.3g}" for p in ps) + " |")
     md = "\n".join(lines) + "\n"
     (out / "table.md").write_text(md)
     return md
@@ -239,8 +346,20 @@ def main(argv=None) -> None:
     ap.add_argument("runs", type=Path)
     ap.add_argument("--grid", type=Path, default=None, help="grid.jsonl; without it, report best found")
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--heldout", type=int, default=None, metavar="N",
+                    help=f"also rescore each method's top N distinct configs on seeds {HELDOUT_SEEDS} "
+                         "(needs --space, --cache and the BLIS_* environment)")
+    ap.add_argument("--space", type=Path, default=None, help="space YAML (for --heldout)")
+    ap.add_argument("--cache", type=Path, default=None, help="BLIS cache dir (for --heldout)")
     a = ap.parse_args(argv)
+    if a.heldout is not None and (a.space is None or a.cache is None):
+        ap.error("--heldout needs --space and --cache")
     analyze(a.runs, a.out, a.grid)
+    if a.heldout is not None:
+        from config_forage.blis.runner import BlisEnv, CachedRunner
+        from config_forage.space import load_space
+        sp = load_space(a.space)
+        heldout(a.runs, a.out, a.heldout, CachedRunner(BlisEnv.from_env(), sp.scenario, a.cache), sp)
 
 
 if __name__ == "__main__":

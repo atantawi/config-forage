@@ -1,6 +1,8 @@
 """cf-bench: run each arm at each seed to a budget of unique BLIS runs over one shared cached runner.
 
-Layout: OUT/<arm>/seed-<k>.json (Trace JSON) and OUT/manifest.json; existing traces are skipped."""
+Layout: OUT/<arm>/seed-<k>.json (Trace JSON) and OUT/manifest.json; existing traces are skipped.
+A resumed call must use the same budget and options. manifest["calls"] logs each call's new traces,
+unique BLIS runs, cache hits and timeouts; manifest["active_rules"] the rules each diagnostic arm can apply."""
 
 from __future__ import annotations
 
@@ -11,6 +13,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
 from pathlib import Path
 
 from config_forage.biasers import DEFAULT_RULES, DiagnosticBiaser, TransferPrior
@@ -100,13 +103,29 @@ def bench(space: KnobSpace, runner, arms: list[str], seeds: list[int], budget: i
         old = json.loads(mpath.read_text())
         if old.get("budget") != budget:
             raise ValueError(f"{out} holds runs at budget {old.get('budget')}, not {budget}")
+        want = {k: str(v) for k, v in opts.items() if k != "workers"}
+        if "opts" in old and old["opts"] != want:
+            raise ValueError(f"{out} holds runs made with opts {old['opts']}, not {want}; "
+                             "resume with the same options or use another --out")
     out.mkdir(parents=True, exist_ok=True)
     all_arms = list(dict.fromkeys([*old.get("arms", []), *arms]))  # a resumed call adds to the record
     all_seeds = sorted({*old.get("seeds", []), *seeds})
-    mpath.write_text(json.dumps({"space": space_path, "budget": budget, "arms": all_arms, "seeds": all_seeds,
-                                 "pins": list(PINS), "git_sha": _git_sha(), "jobs": jobs,
-                                 "workers": opts.get("workers"),
-                                 "opts": {k: str(v) for k, v in opts.items() if k != "workers"}}, indent=2))
+    active = {}
+    for a in arms:  # what each diagnostic arm can actually steer in this space
+        diag = [b for b in getattr(ARMS[a](space, opts), "biasers", ()) if isinstance(b, DiagnosticBiaser)]
+        if diag:
+            active[a] = [asdict(r) for b in diag for r in b.active_rules()]
+            if not active[a]:
+                print(f"cf-bench: warning: {a}: no active diagnostic rule in this space (every rule's knob "
+                      f"is single-valued, or its signal cannot occur); the arm equals its base arm", file=sys.stderr)
+    if old.get("active_rules"):
+        active.update({a: r for a, r in old["active_rules"].items() if a not in active})
+    manifest = {"space": space_path, "budget": budget, "arms": all_arms, "seeds": all_seeds,
+                "pins": list(PINS), "git_sha": _git_sha(), "jobs": jobs, "workers": opts.get("workers"),
+                "opts": {k: str(v) for k, v in opts.items() if k != "workers"}, "active_rules": active,
+                "calls": old.get("calls", [])}
+    mpath.write_text(json.dumps(manifest, indent=2))
+    c0 = {k: getattr(runner, k, 0) for k in ("unique_runs", "cache_hits", "timeouts")}
     todo = [(a, s) for a in arms for s in seeds if not (out / a / f"seed-{s}.json").exists()]
 
     def one(job):
@@ -120,9 +139,15 @@ def bench(space: KnobSpace, runner, arms: list[str], seeds: list[int], budget: i
         return t
 
     if jobs <= 1:
-        return [one(j) for j in todo]
-    with ThreadPoolExecutor(max_workers=jobs) as ex:
-        return list(ex.map(one, todo))
+        new = [one(j) for j in todo]
+    else:
+        with ThreadPoolExecutor(max_workers=jobs) as ex:
+            new = list(ex.map(one, todo))
+    # per call: BLIS runs, cache hits and timeouts (rc -1) on the shared runner
+    manifest["calls"].append({"new_traces": len(new),
+                              **{k: getattr(runner, k, 0) - v for k, v in c0.items()}})
+    mpath.write_text(json.dumps(manifest, indent=2))
+    return new
 
 
 def main(argv=None) -> None:
@@ -143,7 +168,7 @@ def main(argv=None) -> None:
     ts = bench(sp, runner, [m.strip() for m in a.methods.split(",") if m.strip()], parse_seeds(a.seeds),
                a.budget, a.out, opts, a.jobs, str(a.space))
     print(f"cf-bench: {len(ts)} new traces; {runner.unique_runs} unique BLIS runs, "
-          f"{runner.cache_hits} cache hits", file=sys.stderr)
+          f"{runner.cache_hits} cache hits, {runner.timeouts} timeouts", file=sys.stderr)
 
 
 if __name__ == "__main__":

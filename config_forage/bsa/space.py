@@ -1,6 +1,6 @@
 """Decision space: user-provided design axes, each with a finite set of options.
 
-Extracted from ai-forage c4339d2; this copy is canonical."""
+Extracted from the author's earlier BSA research code (commit c4339d2)."""
 
 from __future__ import annotations
 

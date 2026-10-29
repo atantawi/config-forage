@@ -37,7 +37,7 @@ def test_min_footprint_floor():
     assert not is_feasible({}, floor)  # absent topology = width 1
     fsp = type(sp)(floor, sp.knobs)
     feas = list(enumerate_feasible(fsp))
-    assert feas and all(fsp.config(d)["tp"] * fsp.config(d)["dp"] == 8 for d in feas)
+    assert feas and all(fsp.knob_values(d)["tp"] * fsp.knob_values(d)["dp"] == 8 for d in feas)
     assert len(feas) < sum(1 for _ in enumerate_feasible(sp))
     g, rng = CategoricalGenerator(fsp.decision_space), np.random.default_rng(0)
     for _ in range(300):
@@ -50,7 +50,7 @@ def test_feasibility_biaser_never_samples_infeasible():
     seen = set()
     for _ in range(2000):
         d = g.sample(rng, [FeasibilityBiaser(sp)])
-        assert is_feasible(sp.config(d), sp.scenario)
+        assert is_feasible(sp.knob_values(d), sp.scenario)
         seen.add(d)
     assert len(seen) > 20
 
@@ -64,5 +64,5 @@ def test_enumerate_feasible_matches_filter():
         if d[4] != 1:
             d[5] = None
         want.add(tuple(d))
-    want = {d for d in want if is_feasible(sp.config(d), sp.scenario)}
+    want = {d for d in want if is_feasible(sp.knob_values(d), sp.scenario)}
     assert got == want and len(got) > 0

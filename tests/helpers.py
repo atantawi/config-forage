@@ -55,7 +55,7 @@ class SyntheticObjective:
             return len(self._seen) * self.runs_per_eval
 
     def __call__(self, d) -> ProbeResult:
-        s = self.score_fn(self.space.config(d))
+        s = self.score_fn(self.space.knob_values(d))
         keys = frozenset(f"{d}:{i}" for i in range(self.runs_per_eval))
         with self._lock:
             self._seen.add(d)

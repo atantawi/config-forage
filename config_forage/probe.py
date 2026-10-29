@@ -1,6 +1,10 @@
 """Concurrency probe to C* (max SLO-passing concurrency) and the scalar objective.
 
-Score = -(tokens_per_sec / gpus) at c_use = max(1, floor(h·C*)); None for a failed config (lower is better)."""
+Score = -(tokens_per_sec / gpus) at c_use = max(1, floor(h·C*)); None for a failed config (lower is better).
+
+The probe climbs upstream's ladder; if every rung passes it keeps doubling c up to C_CAP, then bisects
+between the last pass and the first failure. If C_CAP itself passes, C* = C_CAP and
+diagnostics["c_star_censored"] is True."""
 
 from __future__ import annotations
 
@@ -11,7 +15,9 @@ from dataclasses import dataclass, field
 from config_forage.bsa.space import Decision
 from config_forage.space import KnobSpace, Scenario, Slo
 
-__all__ = ["Slo", "ProbeResult", "ladder", "probe", "Objective"]
+C_CAP = 4096  # hard cap on the probed concurrency past the ladder top
+
+__all__ = ["C_CAP", "Slo", "ProbeResult", "ladder", "probe", "infeasible_result", "Objective"]
 
 
 @dataclass(frozen=True)
@@ -27,7 +33,8 @@ class ProbeResult:
 
 
 def ladder(gpu_budget: int) -> list[int]:
-    """Probe ladder (upstream concurrency_ramp): 1..32, then doubling to max(32, 2·budget)."""
+    """Probe ladder (upstream concurrency_ramp): 1..32, then doubling to max(32, 2·budget).
+    `probe` extends it by doubling past the top (to C_CAP) when every rung passes."""
     ramp, c, top = [1, 2, 4, 8, 16, 24, 32], 64, max(32, gpu_budget * 2)
     while c <= top:
         ramp.append(c)
@@ -59,6 +66,13 @@ def probe(runner, config: dict, scenario: Scenario, seed: int | None = None) -> 
         lo = c
     if lo is None:
         return result()
+    while hi is None and lo < C_CAP:  # every rung passed: keep doubling to the first failure
+        c = min(2 * lo, C_CAP)
+        if ok(c):
+            lo = c
+        else:
+            hi = c
+    censored = hi is None
     while hi is not None and hi - lo > 1:  # a run error counts as an SLO failure
         mid = (lo + hi) // 2
         lo, hi = (mid, hi) if ok(mid) else (lo, mid)
@@ -66,7 +80,8 @@ def probe(runner, config: dict, scenario: Scenario, seed: int | None = None) -> 
 
     m_star = recs[c_star].get("metrics") or {}
     pre = int(m_star.get("preemption_count") or 0)
-    diag = {"preemptions": pre, "kv_starved": pre > 0, "ttft_bound": False, "binding": None}
+    diag = {"preemptions": pre, "kv_starved": pre > 0, "ttft_bound": False, "binding": None,
+            "c_star_censored": censored}
     if hi is not None:
         f = recs[hi]
         fm = f.get("metrics") or {}
@@ -93,8 +108,26 @@ def probe(runner, config: dict, scenario: Scenario, seed: int | None = None) -> 
     return result(-(tps / gpus), c_star, c_use, tps / gpus, m, diag)
 
 
+INFEASIBLE_PREFIX = "infeasible:"
+
+
+def infeasible_result(knobs: dict, scenario: Scenario, seed: int | None = None) -> ProbeResult:
+    """A rule-infeasible config: a failure charged one synthetic run (as if BLIS rejected it at
+    c = 1), keyed so the same config costs 1 once. BLIS is not called."""
+    from config_forage.blis.runner import cache_key
+    seed = scenario.seed if seed is None else seed
+    key = INFEASIBLE_PREFIX + cache_key(knobs, 1, seed, scenario)
+    diag = {"preemptions": 0, "kv_starved": False, "ttft_bound": False, "binding": "infeasible",
+            "c_star_censored": False}
+    return ProbeResult(None, None, None, None, {}, diag, 1, frozenset([key]))
+
+
 class Objective:
-    """Decision -> ProbeResult; runs_used = distinct cache keys touched (hits included), thread-safe."""
+    """Decision -> ProbeResult; runs_used = distinct cache keys touched (hits included), thread-safe.
+
+    A decision that fails is_feasible (the topology rules, which include width > the GPU budget) is
+    not sent to BLIS: it scores None, charged one run (`infeasible_result`). So a searcher without
+    the feasibility biaser pays for an infeasible sample as it would for a BLIS rejection at c = 1."""
 
     def __init__(self, space: KnobSpace, runner):
         self.space, self.runner = space, runner
@@ -108,7 +141,12 @@ class Objective:
             return len(self._keys)
 
     def __call__(self, d: Decision) -> ProbeResult:
-        p = probe(self.runner, self.space.config(d), self.runner.scenario)
+        from config_forage.feasibility import is_feasible
+        knobs, sc = self.space.knob_values(d), self.runner.scenario
+        if is_feasible(knobs, sc):
+            p = probe(self.runner, self.space.config(d), sc)
+        else:
+            p = infeasible_result(knobs, sc)
         with self._lock:
             self._keys |= p.keys
             self.evaluations += 1

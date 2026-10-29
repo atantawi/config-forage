@@ -2,7 +2,7 @@ import threading
 from dataclasses import replace
 
 from config_forage.blis.runner import CachedRunner
-from config_forage.probe import Objective, ProbeResult, Slo, ladder, probe
+from config_forage.probe import C_CAP, Objective, ProbeResult, Slo, ladder, probe
 from config_forage.space import Knob, KnobSpace, Scenario
 
 SC = Scenario("m", "h100", "chatbot", 8, "0.29.0")
@@ -51,10 +51,21 @@ def test_probe_treats_run_error_as_fail(tmp_path):
     assert p.c_star == 19 and p.c_use == 15 and p.diagnostics["binding"] == "error"
 
 
-def test_probe_ladder_top_passes(tmp_path):
+def test_probe_extends_past_ladder_top(tmp_path):
+    p = probe(runner(tmp_path, itl=lambda c: 5.0 if c < 300 else 50.0), CFG, SC)
+    assert p.c_star == 299 and p.c_use == 239 and p.diagnostics["c_star_censored"] is False
+    assert p.diagnostics["binding"] == "itl"
+
+
+def test_probe_never_fails_is_censored_at_cap(tmp_path):
     p = probe(runner(tmp_path, itl=lambda c: 1.0), CFG, SC)
-    assert p.c_star == ladder(8)[-1] and p.c_use == 25
+    assert p.c_star == C_CAP == 4096 and p.c_use == 3276 and p.diagnostics["c_star_censored"] is True
     assert p.diagnostics["binding"] is None and p.diagnostics["ttft_bound"] is False
+    assert p.runs == len(ladder(8)) + 7 + 1  # 64 … 4096 doubling, then c_use
+
+
+def test_probe_not_censored_when_ladder_fails(tmp_path):
+    assert probe(runner(tmp_path), CFG, SC).diagnostics["c_star_censored"] is False
 
 
 def test_probe_missing_gpus_is_none(tmp_path):
@@ -106,3 +117,52 @@ def test_runs_used_threads_union_keys(tmp_path):
     for t in ts: t.start()
     for t in ts: t.join()
     assert obj.runs_used == len(out[(0, 0)].keys | out[(1, 1)].keys) > out[(0, 0)].runs
+
+
+# --- C1: an infeasible config is a failure charged one synthetic run, BLIS never called -----------
+
+def counting_runner(tmp_path, sc=SC):
+    calls = []
+    f = fake()
+
+    def fn(config, c, seed):
+        calls.append((dict(config), c))
+        return f(config, c, seed)
+    return CachedRunner(None, sc, tmp_path, run_fn=fn), calls
+
+
+def test_objective_infeasible_charged_one_run_without_blis(tmp_path):
+    from config_forage.blis.runner import cache_key
+    sc = replace(SC, gpu_budget=16, model_entry={"arch": "MoE"})
+    sp = KnobSpace(sc, (Knob("tp", (8, 4)), Knob("dp", (1, 4))))
+    r, calls = counting_runner(tmp_path, sc)
+    obj = Objective(sp, r)
+    p = obj((1, 1))  # tp4·dp4 = width 16 > 8 GPUs per node
+    assert p.score is None and p.c_star is None and p.runs == 1 and calls == []
+    assert p.diagnostics["binding"] == "infeasible"
+    (key,) = p.keys
+    assert key == "infeasible:" + cache_key({"tp": 4, "dp": 4}, 1, sc.seed, sc)
+    assert obj.runs_used == 1
+    obj((1, 1))
+    assert obj.runs_used == 1 and obj.evaluations == 2  # the same infeasible config costs 1 once
+    assert obj((0, 0)).score is not None and calls
+
+
+def test_objective_width_over_budget_does_not_crash(tmp_path):
+    sc = replace(SC, gpu_budget=8, model_entry={"arch": "MoE"})
+    sp = KnobSpace(sc, (Knob("tp", (8, 4)), Knob("dp", (1, 4))))
+    r, calls = counting_runner(tmp_path, sc)
+    p = Objective(sp, r)((0, 1))  # tp8·dp4 = 32 > budget 8: num_instances would be 0
+    assert p.score is None and p.runs == 1 and p.diagnostics["binding"] == "infeasible" and calls == []
+
+
+def test_uniform_bsa_never_calls_blis_on_infeasible(tmp_path):
+    from config_forage.feasibility import is_feasible
+    from config_forage.search.bsa import BsaSearcher
+    sc = replace(SC, gpu_budget=16, model_entry={"arch": "MoE"})
+    sp = KnobSpace(sc, (Knob("tp", (1, 2, 4, 8)), Knob("dp", (1, 2, 4, 8)), Knob("max_num_seqs", (64, 128))))
+    r, calls = counting_runner(tmp_path, sc)
+    obj = Objective(sp, r)
+    BsaSearcher(sp, [], batch=8, workers=2).search(obj, 60, 0)
+    assert calls and all(is_feasible(c, sc) for c, _ in calls)
+    assert obj.runs_used > r.unique_runs  # the infeasible samples were charged, synthetically

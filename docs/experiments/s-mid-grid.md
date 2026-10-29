@@ -72,8 +72,9 @@ Headline:
 - **Below 1% everywhere probed: max_num_seqs (0.0%), cache_dtype (≤ 0.5%), gpu_memory_utilization
   (0.0% where it runs).** C* stays ≤ 32, far below every max_num_seqs value, so the batch cap never
   binds and KV memory never runs short.
-- **Interaction-only axes**: max_num_batched_tokens is flat at the default topology but moves 4.6% at
-  tp4·dp2 without EP (and 0.9% with EP); gpu_memory_utilization is flat in score but 0.7 is infeasible
+- **Interaction-only axes**: max_num_batched_tokens is flat over 2048–32768 at the default topology
+  but moves 4.6% at tp4·dp2 without EP (and 0.9% with EP); 1024, added later for v2, costs 2.8% even at
+  the default (54.8 vs 56.3, table below); gpu_memory_utilization is flat in score but 0.7 is infeasible
   at tp1·dp8. Both were kept for that reason.
 
 ## Trim to ≤ 5k
@@ -188,6 +189,22 @@ weighted routing, block_size 16). The 5 seeds differ only in axis order and reac
 Implication for the benchmark: on S-mid v2, the score range that separates methods lies in topology
 × routing (37.9–94.9); engine knobs add < 1% at the top. "Within 1%" will be met by the incumbent at
 ~200 runs. Regret below 0.25% (finding the 4-config exact optimum) is where BSA/TPE could show a gain.
+
+## The diagnostic arm is inert on S-mid v2
+
+`bsa-diag` adds `DiagnosticBiaser(DEFAULT_RULES)` to `bsa-feas`, and on this space none of its rules
+can act (`DiagnosticBiaser.active_rules()` is empty; cf-bench now warns and records this in the
+manifest as `active_rules`):
+
+- the kv_starved and itl rules steer gpu_memory_utilization, cache_dtype and max_num_seqs, which v2
+  pins to one value each (they were under 1% everywhere in v1), so their factor is a constant;
+- the ttft_bound rule steers max_num_batched_tokens, but the scenario has no TTFT SLO, so no probe is
+  ever TTFT-bound.
+
+So the factors stay all ones and `bsa-diag` draws exactly what `bsa-feas` draws: in the first S-mid v2
+benchmark their traces were identical seed for seed (cf-analyze now flags such pairs). The S-mid v2
+benchmark says nothing about the diagnostic biaser. Exercising it needs a space where a rule knob
+has several values and its signal occurs (KV pressure or a TTFT SLO), e.g. S-large.
 
 ## S-large value check (`spaces/glm53flash-h100-chatbot-16-large.yaml`)
 

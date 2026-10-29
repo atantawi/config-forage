@@ -26,6 +26,8 @@ class TracePoint:
     best_score: float | None  # best successful score so far; None until the first success
     best_config: dict | None
     evaluated: int  # evaluations so far, this one included
+    decision: list | None = None  # this evaluation's decision (option indices, None = unlabelled)
+    score: float | None = None  # this evaluation's score (None = failed); old traces lack both
 
 
 @dataclass
@@ -52,6 +54,15 @@ class Trace:
         raw = json.loads(s)
         return cls([TracePoint(**p) for p in raw["points"]], raw["method"], raw["seed"], raw.get("extra", {}))
 
+    def top_configs(self, n: int, space: KnobSpace) -> list[tuple[float, dict]]:
+        """The n best distinct successful evaluations as (score, config), best first (needs decisions)."""
+        best: dict[tuple, float] = {}
+        for p in self.points:
+            if p.decision is not None and p.score is not None:
+                d = tuple(p.decision)
+                best[d] = min(p.score, best.get(d, p.score))
+        return [(s, space.config(d)) for d, s in sorted(best.items(), key=lambda x: x[1])[:n]]
+
 
 class Searcher(Protocol):
     name: str
@@ -77,7 +88,8 @@ class Recorder:
             self.best = (r.score, d)
         b = self.best
         self.points.append(TracePoint(runs, None if b is None else b[0],
-                                      None if b is None else self.space.config(b[1]), len(self.points) + 1))
+                                      None if b is None else self.space.config(b[1]), len(self.points) + 1,
+                                      [None if i is None else int(i) for i in d], r.score))
         return r
 
 

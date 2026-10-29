@@ -4,7 +4,7 @@ Date: 2026-10-28. Status: draft for review.
 
 ## 1. Intent
 
-ai-forage built a working Biased Sampling Algorithm (BSA) engine: a categorical generator P over a
+An earlier private research codebase by the author built a working Biased Sampling Algorithm (BSA) engine: a categorical generator P over a
 decision space, sampled axis by axis as a product of experts (P × biaser factors), with a smoothed,
 score-weighted elite update. config-forage applies that engine to a different problem: **finding
 good serving configurations for an LLM inference deployment, using the BLIS simulator as the
@@ -40,7 +40,7 @@ Goals
 4. Baselines at equal BLIS-run budget: random search, Optuna TPE, SMAC3, and the existing
    coordinate search; GP-BO noted/argued but optional (see §7).
 5. A biaser ablation: uniform → +feasibility → +diagnostic soft biasers → +transferred prior.
-6. Docs-as-you-go: a research log and per-experiment write-ups, ai-forage style.
+6. Docs-as-you-go: a research log and per-experiment write-ups.
 
 Non-goals
 - Not replacing BLIS feasibility checks; BLIS stays the arbiter, our feasibility biaser is only a
@@ -73,19 +73,18 @@ Anti-goals (would make this a failure even if it runs)
   max_num_batched_tokens, gpu_memory_utilization hurts; raising past default changes little).
   That is useful prior knowledge — a candidate soft biaser — and a warning that some engine axes
   are flat, which a benchmark space must not be dominated by.
-- Python ≥ 3.12, uv, numpy, pytest — same as ai-forage.
+- Python ≥ 3.12, uv, numpy, pytest.
 
 ## 4. Decided
 
-- **Repo:** new sister repo at `~/Projects/github/config-forage` (local git, branch `main`).
+- **Repo:** a new standalone repository, `config-forage`.
   It will be **public** (external GitHub), because BLIS and blis-config-search are public and the
   goal is to offer the result to that community as a suggestion. Name: `config-forage`; the
   GitHub account/org that hosts it is pending.
-- **Engine reuse:** ai-forage is private, so a public repo cannot depend on it. The BSA engine
-  core (`space.py`, `generator.py`, the structural/oracle biasers; numpy only) is **extracted
-  once into the public repo** and becomes the canonical copy; ai-forage later switches to depend
-  on it. Until then the two copies must not drift: a short note in each records the source commit
-  (ai-forage `c4339d2`). LLM-specific parts (`LLMPriorBiaser`, realizer, evaluators) stay private.
+- **Engine reuse:** the BSA engine comes from an earlier private research codebase, which a
+  public repo cannot depend on. Its core (`space.py`, `generator.py`, the structural/oracle biasers;
+  numpy only) is **extracted once into this repo**; each extracted module records the source commit
+  (`c4339d2`). Nothing else from that codebase is included.
 - **Start with importance sampling + uniform P, then add biasing** in the ablation order of §2.5.
 - **Scalar objective v1:** SLO-feasible output tok/s per GPU at the config's usable capacity,
   as in #3/#21: probe concurrency up and bisect to C* (max concurrency with p99 ITL ≤ SLO, plus
@@ -100,7 +99,7 @@ Anti-goals (would make this a failure even if it runs)
 spaces/        knob space definitions (YAML): axes, values, applicability, scenario
 blis/          runner (scenario YAML + `blis run`), result parsing, content-addressed cache
 probe.py       config → C* bisection → score (+ diagnostics extracted at C*)
-biasers.py     FeasibilityBiaser, DiagnosticBiaser, TransferPrior  (implement forage.Biaser)
+biasers.py     FeasibilityBiaser, DiagnosticBiaser, TransferPrior  (implement the Biaser protocol)
 search/        bsa.py, random.py, tpe.py (optuna), smac.py, coord.py (port of their coordinate search)
 bench/         grid enumeration (ground truth), runner for (method × seed × budget), plots
 docs/          research-log.md, experiments/*.md, specs/
@@ -161,7 +160,7 @@ budget unit only if BLIS is actually called — report both conventions.
   "incumbent") and a generalized coordinate ascent over our full axis lists using our scorer
   (labelled "coord-ascent").
 - **Engine location.** A subpackage inside config-forage (`config_forage/bsa/`), not a separately
-  published package; ai-forage can depend on config-forage later.
+  published package.
 - **Knob support is verified against the pinned runner.** As of v0.10.0, `run_blis.py`
   rejects speculative decoding, PD disaggregation, and `long_prefill_token_threshold`; routing is
   `--routing-policy` / `--routing-scorers` / `--admission-policy` only.
@@ -179,9 +178,9 @@ budget unit only if BLIS is actually called — report both conventions.
 - Exact knob value lists per scenario, after inspecting the catalog and a few BLIS runs.
 - Bisection details for C* (bracket, tolerance, the concurrency ladder) — start from their
   `concurrency_ramp`.
-- Batch size per generation, α/ρ/scheme defaults (start from ai-forage's tuned values).
+- Batch size per generation, α/ρ/scheme defaults (start from the earlier codebase's tuned values).
 - Parallel executor (process pool, host-adaptive cap as in their `sweep_pool.py`).
-- Plot styles; the research-log format follows ai-forage's.
+- Plot styles and the research-log format.
 
 ## 9. Open questions to revisit
 

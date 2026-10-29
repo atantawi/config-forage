@@ -25,7 +25,7 @@ def test_tpe_prunes_infeasible_for_free():
     sp = load_space(TINY)
     obj = SyntheticObjective(sp, lambda c: float(c["max_num_seqs"]))
     t = TpeSearcher(sp).search(obj, 30, 0)
-    assert all(is_feasible(sp.config(d), sp.scenario) for d in obj.calls)
+    assert all(is_feasible(sp.knob_values(d), sp.scenario) for d in obj.calls)
     assert t.extra["infeasible"] > 0 and len(t.points) == len(obj.calls)
 
 
@@ -34,7 +34,7 @@ def test_smac_never_proposes_infeasible():
     obj = SyntheticObjective(sp, lambda c: float(c["max_num_seqs"]))
     t = SmacSearcher(sp).search(obj, 30, 0)
     assert t.method == "smac" and t.points[-1].runs <= 31
-    assert obj.calls and all(is_feasible(sp.config(d), sp.scenario) for d in obj.calls)
+    assert obj.calls and all(is_feasible(sp.knob_values(d), sp.scenario) for d in obj.calls)
 
 
 def test_failed_probe_is_worst_not_best():
@@ -65,3 +65,14 @@ def test_baselines_deterministic_per_seed():
         a, b = (mk().search(SyntheticObjective(sp, lambda c: float(c["max_num_seqs"] - c["tp"])), 25, 3)
                 for _ in range(2))
         assert a.points == b.points and a.extra == b.extra
+
+
+def test_tpe_records_pruned_positions():
+    sp = load_space(TINY)
+    obj = SyntheticObjective(sp, lambda c: float(c["max_num_seqs"]))
+    t = TpeSearcher(sp).search(obj, 30, 0)
+    pa, pp = t.extra["pruned_at"], t.extra["pruned_after"]
+    assert len(pa) == len(pp) == t.extra["infeasible"] > 0
+    assert pa == sorted(pa) and pp == sorted(pp) and all(0 <= k <= len(t.points) for k in pp)
+    for q, k in zip(pa, pp):  # runs_used at a prune = runs of the last point recorded before it
+        assert q == (t.points[k - 1].runs if k else 0)

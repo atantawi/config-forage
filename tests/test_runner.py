@@ -100,3 +100,15 @@ def test_shed_requests_become_an_error_on_miss_and_hit(tmp_path):
     assert r.run(CFG, 8)["error"] is None  # all offered admitted
     raw = next(tmp_path.rglob("*.json")).read_text()
     assert "shed:" not in raw  # the cache keeps BLIS's own record; the guard is derived on return
+
+
+def test_runner_counts_timeouts(tmp_path):
+    from config_forage.blis.runner import CachedRunner
+    from config_forage.space import Scenario
+    sc = Scenario("m", "h100", "chatbot", 8, "0.29.0")
+    r = CachedRunner(None, sc, tmp_path, run_fn=lambda cfg, c, s: {"returncode": -1 if c == 2 else 0, "error": None,
+                                                                    "metrics": {}})
+    r.run({"tp": 8}, 1)
+    r.run({"tp": 8}, 2)
+    r.run({"tp": 8}, 2)  # a timeout is not cached: it runs (and times out) again
+    assert r.timeouts == 2 and r.unique_runs == 3

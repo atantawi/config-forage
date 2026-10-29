@@ -13,14 +13,14 @@ def test_random_feasible_only():
     obj = SyntheticObjective(sp, lambda c: float(c["tp"]))
     t = RandomSearcher(sp, workers=1).search(obj, 40, 0)
     assert t.method == "random" and len(t.points) >= 40
-    assert all(is_feasible(sp.config(d), sp.scenario) for d in obj.calls)
+    assert all(is_feasible(sp.knob_values(d), sp.scenario) for d in obj.calls)
 
 
 def test_random_unbiased_samples_infeasible():
     sp = load_space(TINY)
     obj = SyntheticObjective(sp, lambda c: 0.0)
     RandomSearcher(sp, feasible_only=False, workers=1).search(obj, 64, 0)
-    assert not all(is_feasible(sp.config(d), sp.scenario) for d in obj.calls)
+    assert not all(is_feasible(sp.knob_values(d), sp.scenario) for d in obj.calls)
 
 
 def test_random_stops_when_space_exhausted():

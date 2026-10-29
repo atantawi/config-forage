@@ -58,6 +58,7 @@ class CachedRunner:
         self.run_fn = run_fn or self._blis_run
         self.unique_runs = 0
         self.cache_hits = 0
+        self.timeouts = 0  # BLIS runs that hit the timeout (returncode -1; never cached)
         self._lock = threading.Lock()
         self._key_locks: dict[str, threading.Lock] = {}
 
@@ -102,6 +103,7 @@ class CachedRunner:
             rec = self.run_fn(config, concurrency, seed)
             with self._lock:
                 self.unique_runs += 1
+                self.timeouts += rec.get("returncode") == -1
             if rec.get("returncode") != -1:  # BLIS is deterministic; only a timeout is not cached
                 p = self._path(key)
                 p.parent.mkdir(parents=True, exist_ok=True)
