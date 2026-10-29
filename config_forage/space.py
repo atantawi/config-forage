@@ -37,7 +37,7 @@ class Scenario:
     headroom: float = 0.8
     seed: int = 0
     num_requests_base: int = 80
-    model_entry: dict = field(default_factory=dict)  # catalog row: arch (MoE|dense), heads_kv; absent = dense
+    model_entry: dict = field(default_factory=dict)  # arch (MoE|dense), heads_kv, min_footprint (tp·dp floor); absent = dense
 
 
 @dataclass(frozen=True)

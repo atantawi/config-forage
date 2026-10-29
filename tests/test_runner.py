@@ -86,3 +86,17 @@ def test_non_json_values_in_record_are_cached(tmp_path):
     r = CachedRunner(None, SC, tmp_path, run_fn=fn)
     r.run(CFG, 8)
     assert CachedRunner(None, SC, tmp_path, run_fn=fn).run(CFG, 8)["cmd"] == ["/x/blis"]
+
+
+def test_shed_requests_become_an_error_on_miss_and_hit(tmp_path):
+    def fn(config, concurrency, seed):  # offered = requests_for(c) = 80 at c = 8; BLIS admitted 75
+        return {"metrics": {"injected_requests": 75 if config.get("shed") else 80, "tokens_per_sec": 9.0},
+                "error": None, "returncode": 0, "wall_s": 0.1, "deployment": {}}
+    r = CachedRunner(None, SC, tmp_path, run_fn=fn)
+    miss = r.run({**CFG, "shed": True}, 8)
+    assert miss["error"] == "shed: injected=75 < offered=80"
+    hit = CachedRunner(None, SC, tmp_path, run_fn=fn).run({**CFG, "shed": True}, 8)
+    assert hit["error"] == miss["error"]
+    assert r.run(CFG, 8)["error"] is None  # all offered admitted
+    raw = next(tmp_path.rglob("*.json")).read_text()
+    assert "shed:" not in raw  # the cache keeps BLIS's own record; the guard is derived on return

@@ -76,6 +76,18 @@ class CachedRunner:
         except (FileNotFoundError, json.JSONDecodeError):
             return None
 
+    def _shed_guard(self, rec: dict, concurrency: int) -> dict:
+        """A run that admitted fewer requests than offered is an error: BLIS leaves admission-rejected
+        requests out of injected_requests, so its throughput/latency describe only the admitted load.
+        Derived on return (hit or miss), so cached records written before this guard stay valid."""
+        if rec.get("error") is not None:
+            return rec
+        inj = (rec.get("metrics") or {}).get("injected_requests")
+        offered = requests_for(concurrency, self.scenario.num_requests_base)
+        if inj is not None and inj < offered:
+            return {**rec, "error": f"shed: injected={inj} < offered={offered}"}
+        return rec
+
     def run(self, config: dict, concurrency: int, seed: int | None = None) -> dict:
         seed = self.scenario.seed if seed is None else seed
         key = cache_key(config, concurrency, seed, self.scenario)
@@ -86,7 +98,7 @@ class CachedRunner:
             if rec is not None:
                 with self._lock:
                     self.cache_hits += 1
-                return {**rec, "cache_key": key}
+                return {**self._shed_guard(rec, concurrency), "cache_key": key}
             rec = self.run_fn(config, concurrency, seed)
             with self._lock:
                 self.unique_runs += 1
@@ -96,7 +108,7 @@ class CachedRunner:
                 tmp = p.with_name(f"{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
                 tmp.write_text(json.dumps(rec, default=str))  # cmd holds Paths
                 os.replace(tmp, p)
-            return {**rec, "cache_key": key}
+            return {**self._shed_guard(rec, concurrency), "cache_key": key}
 
 
 def run_batch(fn: Callable[[T], R], items: list[T], workers: int | None = None) -> list[R]:

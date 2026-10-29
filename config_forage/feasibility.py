@@ -16,7 +16,8 @@ TOPOLOGY = ("tp", "dp", "enable_expert_parallel")
 
 
 def is_feasible(config: dict, scenario: Scenario) -> bool:
-    """Absent tp/dp count as 1, absent EP as false. The weights-fit check is left to BLIS."""
+    """Absent tp/dp count as 1, absent EP as false. The weights-fit check is left to BLIS, except for an
+    optional `model_entry.min_footprint`: the smallest tp·dp whose per-rank memory fits (measured)."""
     tp, dp, ep = config.get("tp", 1), config.get("dp", 1), config.get("enable_expert_parallel", False)
     width = tp * dp
     if scenario.model_entry.get("arch") != "MoE" and (dp != 1 or ep):
@@ -25,6 +26,8 @@ def is_feasible(config: dict, scenario: Scenario) -> bool:
         return False  # EP over width 1 shards nothing
     if width > GPUS_PER_NODE or scenario.gpu_budget % width:
         return False
+    if width < scenario.model_entry.get("min_footprint", 1):
+        return False  # weights + fixed occupancy do not fit below this width
     heads_kv = scenario.model_entry.get("heads_kv")
     return not (heads_kv and heads_kv % tp)
 

@@ -28,6 +28,22 @@ def test_is_feasible_rules():
     assert is_feasible({}, moe)  # absent topology knobs
 
 
+def test_min_footprint_floor():
+    sp = load_space(TINY)
+    floor = type(sp.scenario)(**{**sp.scenario.__dict__,
+                                 "model_entry": {"arch": "MoE", "heads_kv": 8, "min_footprint": 8}})
+    assert is_feasible({"tp": 4, "dp": 2}, floor) and is_feasible({"tp": 8}, floor)
+    assert not is_feasible({"tp": 4}, floor) and not is_feasible({"tp": 2, "dp": 2}, floor)
+    assert not is_feasible({}, floor)  # absent topology = width 1
+    fsp = type(sp)(floor, sp.knobs)
+    feas = list(enumerate_feasible(fsp))
+    assert feas and all(fsp.config(d)["tp"] * fsp.config(d)["dp"] == 8 for d in feas)
+    assert len(feas) < sum(1 for _ in enumerate_feasible(sp))
+    g, rng = CategoricalGenerator(fsp.decision_space), np.random.default_rng(0)
+    for _ in range(300):
+        assert is_feasible(fsp.config(g.sample(rng, [FeasibilityBiaser(fsp)])), floor)
+
+
 def test_feasibility_biaser_never_samples_infeasible():
     sp = load_space(TINY)
     g, rng = CategoricalGenerator(sp.decision_space), np.random.default_rng(0)

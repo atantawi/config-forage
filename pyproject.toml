@@ -22,3 +22,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["config_forage"]
+
+[tool.pytest.ini_options]
+markers = ["blis: needs the real BLIS stack (BLIS_BIN etc. set); skipped otherwise"]
