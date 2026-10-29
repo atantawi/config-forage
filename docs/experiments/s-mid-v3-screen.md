@@ -99,3 +99,30 @@ Each S-large v3 value was run once at tp8·dp1, 2 instances, c = 8, and all were
 
 The router accepts weight 0. The `round-robin` picker is not registered in the embedded router, so
 there is no round-robin family.
+
+## Request count (num_requests_base 80 → 1280)
+
+One probe point simulates `max(base, 4c)` requests. At the old base of 80 a run covers only ~30–70
+s of simulated time and takes ~0.5 s of wall time. The closed-loop chatbot sessions have barely left
+their cold start by then (the first round's TTFT is 2–5× the warm one), so throughput is
+under-estimated, and by a different amount per topology.
+
+One run at c = 8–16, as tok/s per GPU (wall time):
+
+| config | 80 req | 320 | 1280 | 5120 |
+|---|---|---|---|---|
+| 2 × tp8 + EP, c = 16 | 86.2 (0.6 s) | 95.5 (1.0 s) | 97.1 (2.7 s) | 97.5 (9.4 s) |
+| 2 × tp2·dp4 + EP, c = 16 | 60.4 (1.1 s) | 64.8 (1.6 s) | 67.1 (4.6 s) | 67.6 (17 s) |
+
+Full probe (score at ⌊0.8·C*⌋) for every S-mid v3 topology plus 6 knob variants, against the base:
+
+- **Ranking vs base 2560 (Spearman):** 0.979 at 80, 0.996 at 320, 0.997 at 640, 1.0 at 1280.
+- **Size of the error at 80:** typically 2–10%, in both directions. For example, tp1·dp8 scores 24.1
+  at 80 and 20.4 at 2560, and the inflight-load gain at tp4·dp2 is 3% at 80 and 12% at 2560.
+- **Effect on the screen:** the earlier one-axis screen (base 80) is right about which knobs are
+  flat, but its spreads are approximate.
+- **The argmax (2 × tp8 + EP) is the same at every base:** 63.5 at 80, 67.1 at 1280.
+
+**At 5120 the default 120 s BLIS timeout cut off dp ≥ 8 configs.** A timeout is not cached, but it
+fails that probe point. So `num_requests_base` is now 1280 in both spaces, and the timeout is 900 s.
+That costs about 5× the wall time per run. The budget unit (unique runs) is unchanged.

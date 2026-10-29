@@ -10,7 +10,7 @@ scenario:
   slo: {itl_p99_ms: 20}
   headroom: 0.8
   seed: 0
-  num_requests_base: 80
+  num_requests_base: 1280  # scores converge here (docs/experiments/s-mid-v3-screen.md); 80 was 5-10% off
   model_entry: {arch: MoE, heads_kv: 64, min_footprint: 8}  # weights fit only from tp·dp = 8 (BLIS memory model)
 knobs:
   - {name: tp, values: [1, 2, 4, 8, 16], default: 8}

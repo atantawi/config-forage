@@ -36,7 +36,7 @@ class BlisEnv:
     catalog: Path
     registry: Path
     scenarios_dir: Path
-    timeout: int = 120
+    timeout: int = 900  # a timeout is not cached but fails the probe point: keep it far above the slowest run
 
     @classmethod
     def from_env(cls) -> BlisEnv:
