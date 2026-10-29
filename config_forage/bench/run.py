@@ -1,0 +1,182 @@
+"""cf-bench: run each arm at each seed to a budget of unique BLIS runs over one shared cached runner.
+
+Layout: OUT/<arm>/seed-<k>.json (Trace JSON) and OUT/manifest.json; existing traces are skipped.
+A resumed call must use the same space (manifest["space_hash"], see space.space_hash), BLIS pins
+(manifest["pins"] = runner.PINS), budget and options. The code revision may differ: each trace records
+extra["provenance"] = {git_sha, dirty, pins} of the call that wrote it, manifest["git_sha"] stays that of
+the first call, and manifest["calls"] logs each call's git_sha, dirty, arms, seeds, time, new traces,
+unique BLIS runs, cache hits and timeouts. manifest["active_rules"] holds the rules each diagnostic arm
+can apply."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
+from pathlib import Path
+
+import config_forage.bench as _pkg
+from config_forage.biasers import DEFAULT_RULES, DiagnosticBiaser, TransferPrior
+from config_forage.blis.runner import PINS, BlisEnv, CachedRunner
+from config_forage.feasibility import FeasibilityBiaser
+from config_forage.probe import Objective
+from config_forage.search.base import Searcher, Trace
+from config_forage.search.bsa import BsaSearcher
+from config_forage.search.coord import CoordAscentSearcher, IncumbentSearcher
+from config_forage.search.random import RandomSearcher
+from config_forage.space import KnobSpace, load_space, space_hash
+
+
+def _transfer(sp: KnobSpace, o: dict) -> Searcher:
+    if not o.get("transfer_from"):
+        raise ValueError("arm bsa-transfer needs the transfer_from option (--transfer-from TRACE.json)")
+    return BsaSearcher(sp, [FeasibilityBiaser(sp), TransferPrior.from_history(o["transfer_from"], space=sp)],
+                       workers=o.get("workers"), name="bsa-transfer")
+
+
+def _tpe(sp: KnobSpace, o: dict) -> Searcher:
+    from config_forage.search.tpe import (
+        TpeSearcher,  # optuna import is slow; load on use
+    )
+    return TpeSearcher(sp)
+
+
+def _smac(sp: KnobSpace, o: dict) -> Searcher:
+    from config_forage.search.smac import SmacSearcher
+    return SmacSearcher(sp)
+
+
+# Each call builds a fresh searcher (and fresh biasers: they carry state).
+ARMS: dict[str, Callable[[KnobSpace, dict], Searcher]] = {
+    "bsa": lambda sp, o: BsaSearcher(sp, [], workers=o.get("workers"), name="bsa"),
+    "bsa-feas": lambda sp, o: BsaSearcher(sp, [FeasibilityBiaser(sp)], workers=o.get("workers"), name="bsa-feas"),
+    "bsa-diag": lambda sp, o: BsaSearcher(sp, [FeasibilityBiaser(sp), DiagnosticBiaser(sp, DEFAULT_RULES)],
+                                          workers=o.get("workers"), name="bsa-diag"),
+    "bsa-transfer": _transfer,
+    "random": lambda sp, o: RandomSearcher(sp, feasible_only=True, workers=o.get("workers")),
+    "tpe": _tpe,
+    "smac": _smac,
+    "incumbent": lambda sp, o: IncumbentSearcher(sp),
+    "coord-ascent": lambda sp, o: CoordAscentSearcher(sp),
+}
+
+
+def parse_seeds(s: str) -> list[int]:
+    """'0-9' or '0,3,5-7' -> sorted distinct ints."""
+    out: set[int] = set()
+    for part in s.split(","):
+        lo, _, hi = part.strip().partition("-")
+        out.update(range(int(lo), int(hi or lo) + 1))
+    return sorted(out)
+
+
+def run_one(space: KnobSpace, runner, arm: str, seed: int, budget: int, opts: dict) -> Trace:
+    """A fresh searcher and a fresh Objective over the shared runner; stop reason filled if absent."""
+    t = ARMS[arm](space, opts).search(Objective(space, runner), budget, seed)
+    t.method = arm
+    if "stop" not in t.extra:
+        t.extra["stop"] = "budget" if t.points and t.points[-1].runs >= budget else "stall"
+    return t
+
+
+def bench(space: KnobSpace, runner, arms: list[str], seeds: list[int], budget: int, out: Path,
+          opts: dict | None = None, jobs: int = 1, space_path: str | None = None) -> list[Trace]:
+    """Run every (arm, seed) whose trace file is missing; return the new traces in (arm, seed) order."""
+    opts, out = dict(opts or {}), Path(out)
+    unknown = [a for a in arms if a not in ARMS]
+    if unknown:
+        raise ValueError(f"unknown arm(s) {unknown}; expected some of {list(ARMS)}")
+    if "bsa-transfer" in arms and not opts.get("transfer_from"):
+        raise ValueError("arm bsa-transfer needs the transfer_from option (--transfer-from TRACE.json)")
+    if jobs > 1 and opts.get("workers") is None:  # keep jobs x workers threads near the core count
+        opts["workers"] = max(1, ((os.cpu_count() or 2) - 1) // jobs)
+    mpath, old, sh = out / "manifest.json", {}, space_hash(space)
+    if mpath.exists():
+        old = json.loads(mpath.read_text())
+        if old.get("space_hash") != sh:
+            raise ValueError(f"{out} holds runs of space_hash {old.get('space_hash')}, not this space's {sh} "
+                             f"(the space changed, or the manifest predates space hashing); use another --out")
+        if old.get("pins") != list(PINS):
+            raise ValueError(f"{out} holds runs made with BLIS pins {old.get('pins')}, not this stack's "
+                             f"{list(PINS)}; resuming would mix simulator versions, so use a fresh --out")
+        if old.get("budget") != budget:
+            raise ValueError(f"{out} holds runs at budget {old.get('budget')}, not {budget}")
+        want = {k: str(v) for k, v in opts.items() if k != "workers"}
+        if "opts" in old and old["opts"] != want:
+            raise ValueError(f"{out} holds runs made with opts {old['opts']}, not {want}; "
+                             "resume with the same options or use another --out")
+    out.mkdir(parents=True, exist_ok=True)
+    all_arms = list(dict.fromkeys([*old.get("arms", []), *arms]))  # a resumed call adds to the record
+    all_seeds = sorted({*old.get("seeds", []), *seeds})
+    active = {}
+    for a in arms:  # what each diagnostic arm can actually steer in this space
+        diag = [b for b in getattr(ARMS[a](space, opts), "biasers", ()) if isinstance(b, DiagnosticBiaser)]
+        if diag:
+            active[a] = [asdict(r) for b in diag for r in b.active_rules()]
+            if not active[a]:
+                print(f"cf-bench: warning: {a}: no active diagnostic rule in this space (every rule's knob "
+                      f"is single-valued, or its signal cannot occur); the arm equals its base arm", file=sys.stderr)
+    if old.get("active_rules"):
+        active.update({a: r for a, r in old["active_rules"].items() if a not in active})
+    git = _pkg.git_state()
+    prov = {**git, "pins": list(PINS)}
+    manifest = {"space": space_path, "space_hash": sh, "budget": budget, "arms": all_arms, "seeds": all_seeds,
+                "pins": list(PINS), "git_sha": old.get("git_sha") if old else git["git_sha"],  # the first call's
+                "jobs": jobs, "workers": opts.get("workers"),
+                "opts": {k: str(v) for k, v in opts.items() if k != "workers"}, "active_rules": active,
+                "calls": old.get("calls", [])}
+    mpath.write_text(json.dumps(manifest, indent=2))
+    c0 = {k: getattr(runner, k, 0) for k in ("unique_runs", "cache_hits", "timeouts")}
+    todo = [(a, s) for a in arms for s in seeds if not (out / a / f"seed-{s}.json").exists()]
+
+    def one(job):
+        a, s = job
+        t = run_one(space, runner, a, s, budget, opts)
+        t.extra["provenance"] = dict(prov)
+        p = out / a / f"seed-{s}.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(t.to_json())
+        tmp.replace(p)
+        return t
+
+    if jobs <= 1:
+        new = [one(j) for j in todo]
+    else:
+        with ThreadPoolExecutor(max_workers=jobs) as ex:
+            new = list(ex.map(one, todo))
+    # per call: BLIS runs, cache hits and timeouts (rc -1) on the shared runner
+    manifest["calls"].append({**git, "arms": list(arms), "seeds": list(seeds), "time": _pkg.now(),
+                              "new_traces": len(new),
+                              **{k: getattr(runner, k, 0) - v for k, v in c0.items()}})
+    mpath.write_text(json.dumps(manifest, indent=2))
+    return new
+
+
+def main(argv=None) -> None:
+    ap = argparse.ArgumentParser(prog="cf-bench", description=__doc__)
+    ap.add_argument("space", type=Path)
+    ap.add_argument("--methods", default="bsa,bsa-feas,bsa-diag,random,tpe,smac,incumbent,coord-ascent")
+    ap.add_argument("--seeds", default="0-9", help="ranges and comma lists, e.g. 0-9 or 0,2,5-7")
+    ap.add_argument("--budget", type=int, default=1000, help="unique BLIS runs per (method, seed)")
+    ap.add_argument("--cache", type=Path, required=True)
+    ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--jobs", type=int, default=1, help="(method, seed) pairs run in parallel")
+    ap.add_argument("--workers", type=int, default=None, help="BSA/random batch parallelism")
+    ap.add_argument("--transfer-from", default=None, help="BSA trace JSON whose last P seeds bsa-transfer")
+    a = ap.parse_args(argv)
+    sp = load_space(a.space)
+    runner = CachedRunner(BlisEnv.from_env(), sp.scenario, a.cache)
+    opts = {k: v for k, v in (("workers", a.workers), ("transfer_from", a.transfer_from)) if v is not None}
+    ts = bench(sp, runner, [m.strip() for m in a.methods.split(",") if m.strip()], parse_seeds(a.seeds),
+               a.budget, a.out, opts, a.jobs, str(a.space))
+    print(f"cf-bench: {len(ts)} new traces; {runner.unique_runs} unique BLIS runs, "
+          f"{runner.cache_hits} cache hits, {runner.timeouts} timeouts", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()
