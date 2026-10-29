@@ -18,7 +18,10 @@ def test_is_feasible_rules():
     assert not is_feasible({"tp": 1, "dp": 2}, dense)  # dense: no dp
     assert not is_feasible({"tp": 2, "enable_expert_parallel": True}, dense)  # dense: no EP
     assert not is_feasible({"tp": 1, "dp": 1, "enable_expert_parallel": True}, moe)
-    assert not is_feasible({"tp": 8, "dp": 2}, moe)  # 16 > one node
+    assert is_feasible({"tp": 8, "dp": 2}, moe)  # 16 = two whole nodes (one multi-node instance)
+    big = type(moe)(**{**moe.__dict__, "gpu_budget": 24})
+    assert not is_feasible({"tp": 4, "dp": 3}, big)  # 12 straddles a node boundary
+    assert is_feasible({"tp": 8, "dp": 3}, big) and not is_feasible({"tp": 8, "dp": 2}, big)  # 24 % 16
     low = type(moe)(**{**moe.__dict__, "gpu_budget": 12})
     assert not is_feasible({"tp": 4, "dp": 2}, low)  # 12 % 8
     assert is_feasible({"tp": 4}, low)
@@ -37,7 +40,7 @@ def test_min_footprint_floor():
     assert not is_feasible({}, floor)  # absent topology = width 1
     fsp = type(sp)(floor, sp.knobs)
     feas = list(enumerate_feasible(fsp))
-    assert feas and all(fsp.knob_values(d)["tp"] * fsp.knob_values(d)["dp"] == 8 for d in feas)
+    assert feas and all(fsp.knob_values(d)["tp"] * fsp.knob_values(d)["dp"] in (8, 16) for d in feas)
     assert len(feas) < sum(1 for _ in enumerate_feasible(sp))
     g, rng = CategoricalGenerator(fsp.decision_space), np.random.default_rng(0)
     for _ in range(300):
@@ -130,4 +133,4 @@ def test_feasible_topologies():
         assert feasible_topologies(sp) == want
     with Deadline(0.5):
         ts = feasible_topologies(load_space(LARGE))
-    assert ts and all(t["tp"] * t["dp"] == 8 for t in ts)
+    assert ts and all(t["tp"] * t["dp"] in (8, 16) for t in ts)

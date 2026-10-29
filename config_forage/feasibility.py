@@ -1,4 +1,7 @@
-"""Exact topology feasibility (rules from blis-config-search topologies.py) and its biaser."""
+"""Exact topology feasibility (rules from blis-config-search topologies.py) and its biaser.
+
+Multi-node instances are allowed as BLIS v0.14.0 places them: a width tp·dp above one node must fill
+whole nodes. Upstream's topologies.py keeps one instance per node unless a model does not fit."""
 
 from __future__ import annotations
 
@@ -28,8 +31,10 @@ def is_feasible(config: dict, scenario: Scenario) -> bool:
         return False  # dense models take neither dp nor EP
     if ep and width <= 1:
         return False  # EP over width 1 shards nothing
-    if width > GPUS_PER_NODE or scenario.gpu_budget % width:
+    if scenario.gpu_budget % width:
         return False
+    if width > GPUS_PER_NODE and width % GPUS_PER_NODE:
+        return False  # a multi-node instance fills whole nodes (BLIS places it; run_blis refuses a straddle)
     if width < scenario.model_entry.get("min_footprint", 1):
         return False  # weights + fixed occupancy do not fit below this width
     heads_kv = scenario.model_entry.get("heads_kv")
