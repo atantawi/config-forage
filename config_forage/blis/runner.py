@@ -14,14 +14,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
+from config_forage import router
 from config_forage.blis import run_blis
 from config_forage.space import Scenario
 
 T = TypeVar("T")
 R = TypeVar("R")
 
-PINS = ("inference-sim v0.10.0 0d092d4ef64f605046de1181adf8e2b6ee564725", "kernel v0.1.0",
-        "catalog 0.2.1", "registry v0.1.1")
+PINS = ("inference-sim v0.14.0 f2ba6bb1c189ed5a56933cfa3d0927eae3836ee9", "kernel v0.4.0",
+        "blis-vllm v0.32.0", "catalog 0.3.0", "registry v0.2.0")
 
 
 def requests_for(concurrency: int, base: int = 80) -> int:
@@ -90,7 +91,10 @@ class CachedRunner:
         return rec
 
     def run(self, config: dict, concurrency: int, seed: int | None = None) -> dict:
+        """Router knobs are translated first (router.to_blis), so the cache key covers the
+        EndpointPickerConfig BLIS actually runs, not just the knob values."""
         seed = self.scenario.seed if seed is None else seed
+        config = router.to_blis(config)
         key = cache_key(config, concurrency, seed, self.scenario)
         with self._lock:
             klock = self._key_locks.setdefault(key, threading.Lock())

@@ -1,4 +1,7 @@
-# Vendored from inference-sim/blis-config-search (Apache-2.0) at 1a6dc6fa89b7c3569b409b9b5c92143267dd80ad; do not edit — re-vendor.
+# Vendored from inference-sim/blis-config-search (Apache-2.0) at 1a6dc6fa89b7c3569b409b9b5c92143267dd80ad,
+# then modified for BLIS v0.14.0 (see NOTICE): routing goes through the embedded llm-d router, which
+# the scenario's `router:` block configures with an EndpointPickerConfig (epp_config); the BLIS-native
+# routing/admission flags were removed in v0.12.0. DP load balancing is a pool parallel field.
 #!/usr/bin/env python3
 # run_blis.py -- the ONE place config-search invokes BLIS and records a single run.
 #
@@ -8,27 +11,28 @@
 # hardware, tp/pp/dp/ep, engine knobs) from a committed SCENARIO and REFUSES
 # --model/--hardware/--tp/--dp/--enable-expert-parallel on the CLI. So a candidate's per-instance
 # topology is written into a generated Scenario+Deployment YAML; only workload, concurrency, instance
-# counts, scheduler/routing/admission policy, and seed stay on the CLI.
+# counts, scheduler/preemption policy, and seed stay on the CLI; the router config is a scenario block.
 #
 # Every candidate key is classified to its scenario/CLI slot; UNKNOWN or NOT-YET-SUPPORTED keys are
 # REJECTED (recorded as an error row), never silently dropped -- else two candidates could differ in
 # the ledger yet run the identical command.
 #
-# Pinned stack: BLIS v0.10.0 @ 0d092d4 (kernel v0.1.0 in go.mod), blis-catalog 0.2.1,
-# blis-registry v0.1.1 (holds the 6 coefficient sets below, incl cost-model-memory).
+# Pinned stack: BLIS v0.14.0 @ f2ba6bb (kernel v0.4.0, blis-vllm v0.32.0 in go.mod), blis-catalog
+# 0.3.0, blis-registry v0.2.0 (holds the 6 coefficient sets below, incl cost-model-memory).
 import argparse, hashlib, json, os, subprocess, sys, tempfile, time
 
 COEFFICIENTS = ["cost-model-primitives", "cost-model-collectives", "cost-model-host-overheads",
                 "cost-model-attention", "cost-model-recurrent", "cost-model-memory"]
 
 # --- candidate-key classification (allowlist; anything else is rejected, never silently ignored) ---
-SCENARIO_PARALLEL = ("tp", "pp", "dp", "enable_expert_parallel")       # -> scenario Deployment.parallel
+SCENARIO_PARALLEL = ("tp", "pp", "dp", "enable_expert_parallel",       # -> scenario Deployment.parallel
+                     "data_parallel_load_balancing")
+# -> the scenario's `router.endpoint_picker_config`: an EndpointPickerConfig (a dict) written next to it
+SCENARIO_ROUTER = ("epp_config",)
 SCENARIO_ENGINE = ("quantization", "cache_dtype", "block_size", "max_num_batched_tokens",
                    "max_num_seqs", "max_model_len", "cudagraph_mode", "gpu_memory_utilization")
 CLI_FLAGS = {"num_instances": "--num-instances", "concurrency": "--concurrency",
-             "scheduler": "--scheduler", "routing_policy": "--routing-policy",
-             "routing_scorers": "--routing-scorers", "admission_policy": "--admission-policy",
-             "preemption_policy": "--preemption-policy"}
+             "scheduler": "--scheduler", "preemption_policy": "--preemption-policy"}
 PARALLEL_DEFAULTS = {"tp": 1, "pp": 1, "dp": 1, "enable_expert_parallel": False}
 GPUS_PER_NODE = 8   # single-node H100; a per-instance footprint beyond this spans nodes (needs a fabric)
 # Cross-node cost resolves from the fabric (a catalog networks/ entry), required once nodes > 1.
@@ -54,6 +58,9 @@ UNSUPPORTED = {
     "speculative_acceptance_rate": "speculative decoding is not yet validated on the kernel backend",
     "speculative_method": "speculative decoding is not yet validated on the kernel backend",
     "long_prefill_token_threshold": "not a kernel scenario field (chunked-prefill threshold is engine-internal)",
+    "routing_policy": "removed in BLIS v0.12.0: route with an EndpointPickerConfig (epp_config)",
+    "routing_scorers": "removed in BLIS v0.12.0: route with an EndpointPickerConfig (epp_config)",
+    "admission_policy": "removed in BLIS v0.12.0: admit with an EndpointPickerConfig (epp_config)",
 }
 
 
@@ -62,11 +69,16 @@ class ConfigError(ValueError):
 
 
 def classify_config(config):
-    """Split a candidate into (parallel, engine, cli); raise ConfigError on unknown/unsupported keys."""
-    parallel, engine, cli = dict(PARALLEL_DEFAULTS), dict(ENGINE_DEFAULTS), {}
+    """Split a candidate into (parallel, engine, cli, router); raise ConfigError on unknown/unsupported
+    keys. router is {} or {"epp_config": <EndpointPickerConfig dict>}."""
+    parallel, engine, cli, router = dict(PARALLEL_DEFAULTS), dict(ENGINE_DEFAULTS), {}, {}
     for k, v in config.items():
         if k in SCENARIO_PARALLEL:
             parallel[k] = v
+        elif k in SCENARIO_ROUTER:
+            if not isinstance(v, dict) or v.get("kind") != "EndpointPickerConfig":
+                raise ConfigError(f"{k!r}: must be an EndpointPickerConfig mapping")
+            router[k] = v
         elif k in SCENARIO_ENGINE:
             engine[k] = v
         elif k in CLI_FLAGS:
@@ -74,7 +86,8 @@ def classify_config(config):
         elif k in UNSUPPORTED:
             raise ConfigError(f"{k!r}: {UNSUPPORTED[k]}")
         else:
-            supported = sorted(SCENARIO_PARALLEL) + sorted(SCENARIO_ENGINE) + sorted(CLI_FLAGS)
+            supported = (sorted(SCENARIO_PARALLEL) + sorted(SCENARIO_ROUTER) + sorted(SCENARIO_ENGINE)
+                         + sorted(CLI_FLAGS))
             raise ConfigError(f"{k!r}: unknown key; supported = {supported}")
     if parallel["pp"] != 1:
         raise ConfigError("pp>1: the pinned kernel does not price pipeline parallelism")
@@ -90,7 +103,7 @@ def classify_config(config):
             f"per-instance footprint tp*pp*dp={fp} spans {fp / GPUS_PER_NODE:.2g} nodes: a "
             f"multi-node instance must fill whole {GPUS_PER_NODE}-GPU nodes (use a footprint that "
             f"is a multiple of {GPUS_PER_NODE}, or scale out with num_instances instead)")
-    return parallel, engine, cli
+    return parallel, engine, cli, router
 
 
 def footprint_gpus(parallel):
@@ -197,7 +210,7 @@ def _completion_issue(m):
 def pool_nodes(parallel, num_instances=1):
     """Nodes the colocated pool must hold for `num_instances` copies of this instance shape.
 
-    BLIS v0.10.0 validates `--num-instances` against the pool's rank capacity: a pool of
+    BLIS (v0.10.0 on) validates `--num-instances` against the pool's rank capacity: a pool of
     `nodes` x 8 GPUs holds floor(nodes*8 / footprint) instances, and asking for more is refused
     ("N instance(s) requested, but ...'s colocated pool holds M rank(s) at its layout"). Sizing
     the pool from ONE instance's footprint therefore capped every search at a single node's
@@ -207,9 +220,11 @@ def pool_nodes(parallel, num_instances=1):
 
 
 def scenario_yaml(model, hardware, engine_version, parallel, engine, name, num_instances=1,
-                  fabric=DEFAULT_FABRIC):
+                  fabric=DEFAULT_FABRIC, epp_file=None):
     """Render a two-doc Scenario+Deployment YAML (no external yaml dep). Omitted engine keys (e.g.
-    quantization when unset) let the checkpoint/engine govern."""
+    quantization when unset) let the checkpoint/engine govern. `epp_file` (a file name in the same
+    directory) becomes the Deployment's router block; without it the router runs its built-in
+    default configuration."""
     def block(d, indent):
         pad = " " * indent
         return "\n".join(f"{pad}{k}: {json.dumps(v)}" for k, v in d.items())
@@ -237,32 +252,51 @@ pools:
 {block(parallel, 6)}
     engine:
 {block(engine, 6)}
-"""
+""" + (f"router:\n  endpoint_picker_config: {epp_file}\n" if epp_file else "")
+
+
+def _publish(path, body):
+    """Write `body` to `path` atomically (temp + os.replace) unless it exists: concurrent pool workers
+    never read a half-written file, and a concurrent writer's replace is idempotent."""
+    if os.path.exists(path):
+        return
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".tmp-", suffix=".yaml")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(body)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def write_epp(scenarios_dir, epp_config):
+    """Write an EndpointPickerConfig as JSON (valid YAML; no yaml dep), content-addressed; return its
+    file name."""
+    body = json.dumps(epp_config, sort_keys=True)
+    name = f"epp-{hashlib.sha1(body.encode()).hexdigest()[:10]}.yaml"
+    os.makedirs(scenarios_dir, exist_ok=True)
+    _publish(os.path.join(scenarios_dir, name), body + "\n")
+    return name
 
 
 def write_scenario(scenarios_dir, model, hardware, engine_version, parallel, engine, num_instances=1,
-                   fabric=DEFAULT_FABRIC):
+                   fabric=DEFAULT_FABRIC, epp_file=None):
     """Write a scenario ATOMICALLY (temp + os.replace) so concurrent pool workers never read a
     half-written file for the same hashed deployment; return its file name.
 
     `num_instances` participates in the hash because it sets the pool's node count — two runs
     that differ only in instance count need DIFFERENT scenario files, or the second reuses a
     pool too small for it and BLIS refuses the run."""
-    key = json.dumps([model, hardware, engine_version, parallel, engine, num_instances, fabric], sort_keys=True)
+    key = [model, hardware, engine_version, parallel, engine, num_instances, fabric]
+    if epp_file:
+        key.append(epp_file)                # content-addressed itself, so the hash covers the config
+    key = json.dumps(key, sort_keys=True)
     name = f"{model}-{hardware}-{hashlib.sha1(key.encode()).hexdigest()[:10]}"
     os.makedirs(scenarios_dir, exist_ok=True)
-    path = os.path.join(scenarios_dir, name + ".yaml")
-    if not os.path.exists(path):
-        body = scenario_yaml(model, hardware, engine_version, parallel, engine, name, num_instances,
-                             fabric)
-        fd, tmp = tempfile.mkstemp(dir=scenarios_dir, prefix=".tmp-", suffix=".yaml")
-        try:
-            with os.fdopen(fd, "w") as f:
-                f.write(body)
-            os.replace(tmp, path)           # atomic publish; a concurrent writer's replace is idempotent
-        finally:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
+    _publish(os.path.join(scenarios_dir, name + ".yaml"),
+             scenario_yaml(model, hardware, engine_version, parallel, engine, name, num_instances,
+                           fabric, epp_file))
     return name + ".yaml"
 
 
@@ -275,7 +309,7 @@ def resolve_defaults(blis, defaults):
 
 def build_cmd(blis, catalog, registry, scenarios_dir, scenario_name, workload, num_requests, seed,
               horizon, defaults, cli):
-    # BLIS v0.10.0 (the pinned release) selects the kernel cost-model backend from the
+    # BLIS (v0.10.0 on) selects the kernel cost-model backend from the
     # scenario's `coefficients:` list (written into the generated scenario), not a CLI flag.
     # The old `--latency-model blis-latency-kernel` flag was removed in the release and is
     # rejected ("unknown flag"), so it must not be passed.
@@ -309,7 +343,7 @@ def run_one(blis, catalog, registry, scenarios_dir, model, hardware, engine_vers
     """Run one kernel-priced BLIS config and return a record dict. No runs.jsonl I/O (caller writes)."""
     rec = _record_shell(config, phase)
     try:
-        parallel, engine, cli = classify_config(config)
+        parallel, engine, cli, router = classify_config(config)
     except ConfigError as e:
         # Same row SHAPE as a real run so neither sweep_pool's summary nor the report trips on a
         # missing key (every record has wall_s, deployment, metrics, ...). returncode=None marks it
@@ -323,8 +357,9 @@ def run_one(blis, catalog, registry, scenarios_dir, model, hardware, engine_vers
     # Fill block_size per MODEL when the candidate did not pin one (see default_block_size): the
     # adapter requires a value, and DSA models require it to be a multiple of 64.
     engine.setdefault("block_size", default_block_size(catalog, model))
+    epp_file = write_epp(scenarios_dir, router["epp_config"]) if router else None
     scenario_name = write_scenario(scenarios_dir, model, hardware, engine_version, parallel, engine,
-                                   num_instances)
+                                   num_instances, epp_file=epp_file)
     cmd = build_cmd(blis, catalog, registry, scenarios_dir, scenario_name, workload,
                     num_requests, seed, horizon, defaults, cli)
     t0 = time.time()
@@ -343,7 +378,7 @@ def run_one(blis, catalog, registry, scenarios_dir, model, hardware, engine_vers
     rec.update({
         "deployment": {"parallel": parallel, "engine": engine, "num_instances": num_instances,
                        "footprint_gpus_per_instance": fp, "gpus": fp * num_instances,
-                       "scenario": scenario_name},
+                       "scenario": scenario_name, "epp_file": epp_file},
         "cmd": cmd, "returncode": rc, "wall_s": round(time.time() - t0, 3),
         "metrics": metrics, "metrics_all_instances": parse_all_instances(stdout) if rc == 0 else [],
         "error": error, "stdout_tail": stdout[-2000:], "stderr_tail": stderr[-2000:],
@@ -354,7 +389,7 @@ def run_one(blis, catalog, registry, scenarios_dir, model, hardware, engine_vers
 def add_common_args(p):
     p.add_argument("--blis", default="./blis")
     p.add_argument("--catalog", default=os.environ.get("BLIS_CATALOG"))
-    p.add_argument("--registry", default=os.environ.get("BLIS_REGISTRY"), help="blis-registry v0.1.1 clone root")
+    p.add_argument("--registry", default=os.environ.get("BLIS_REGISTRY"), help="blis-registry v0.2.0 clone root")
     p.add_argument("--scenarios", required=True, help="dir to write/read generated scenario YAMLs")
     p.add_argument("--model", required=True, help="catalog short-name, e.g. glm-5.3-flash")
     p.add_argument("--hardware", required=True, help="scenario hardware key, e.g. h100")
