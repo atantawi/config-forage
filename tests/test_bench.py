@@ -264,3 +264,122 @@ def test_manifest_counts_timeouts_per_call(setup):
     calls = json.loads((tmp / "runs" / "manifest.json").read_text())["calls"]
     assert len(calls) == 2 and all({"new_traces", "unique_runs", "cache_hits", "timeouts"} <= set(c) for c in calls)
     assert calls[0]["new_traces"] == 1 and calls[0]["timeouts"] > 0
+
+
+# --- P2b: resume refuses a changed space -----------------------------------------------------------
+
+def _narrow(sp):
+    from dataclasses import replace
+
+    from config_forage.space import KnobSpace
+    return KnobSpace(sp.scenario, tuple(replace(k, values=k.values[:2]) if k.name == "max_num_seqs" else k
+                                        for k in sp.knobs))
+
+
+def test_bench_refuses_resume_on_changed_space(setup):
+    from config_forage.space import space_hash
+    sp, runner, tmp = setup
+    run.bench(sp, runner, ["random"], [0], 20, tmp / "runs")
+    m = json.loads((tmp / "runs" / "manifest.json").read_text())
+    assert m["space_hash"] == space_hash(sp)
+    assert run.bench(sp, runner, ["random"], [0, 1], 20, tmp / "runs")  # same space resumes
+    other = _narrow(sp)
+    with pytest.raises(ValueError, match=space_hash(sp)) as e:
+        run.bench(other, runner, ["random"], [2], 20, tmp / "runs")
+    assert space_hash(other) in str(e.value)
+    assert json.loads((tmp / "runs" / "manifest.json").read_text())["space_hash"] == space_hash(sp)
+
+
+def test_bench_refuses_resume_without_space_hash(setup):
+    sp, runner, tmp = setup
+    run.bench(sp, runner, ["random"], [0], 20, tmp / "runs")
+    mp = tmp / "runs" / "manifest.json"
+    m = json.loads(mp.read_text())
+    del m["space_hash"]
+    mp.write_text(json.dumps(m))
+    with pytest.raises(ValueError, match="space_hash"):
+        run.bench(sp, runner, ["random"], [1], 20, tmp / "runs")
+
+
+def test_grid_sidecar_guards_resume(setup):
+    from config_forage.blis.runner import PINS
+    from config_forage.space import space_hash
+    sp, runner, tmp = setup
+    out = tmp / "grid.jsonl"
+    side = tmp / "grid.jsonl.meta.json"
+    grid.grid(sp, runner, out, workers=4, log=None)
+    meta = json.loads(side.read_text())
+    assert meta == {"space_hash": space_hash(sp), "pins": list(PINS)}
+    assert grid.grid(sp, runner, out, workers=4, log=None)["new"] == 0  # same space resumes
+    with pytest.raises(ValueError, match="--out") as e:
+        grid.grid(_narrow(sp), runner, out, workers=4, log=None)
+    assert space_hash(sp) in str(e.value) and space_hash(_narrow(sp)) in str(e.value)
+    side.write_text(json.dumps({**meta, "pins": ["other"]}))
+    with pytest.raises(ValueError, match="pins"):
+        grid.grid(sp, runner, out, workers=4, log=None)
+    side.unlink()
+    with pytest.raises(ValueError, match="sidecar"):  # rows but no sidecar
+        grid.grid(sp, runner, out, workers=4, log=None)
+    empty = tmp / "g2.jsonl"
+    empty.write_text("")  # no rows, no sidecar: fine
+    assert grid.grid(sp, runner, empty, workers=4, log=None)["new"] > 0
+    assert (tmp / "g2.jsonl.meta.json").exists()
+
+
+def test_analyze_warns_on_grid_runs_space_mismatch(setup, capsys):
+    sp, runner, tmp = setup
+    grid.grid(sp, runner, tmp / "grid.jsonl", workers=4, log=None)
+    run.bench(sp, runner, ["random"], [0], 20, tmp / "runs")
+    analyze.analyze(tmp / "runs", tmp / "out", tmp / "grid.jsonl")
+    assert "space_hash" not in capsys.readouterr().err
+    grid.grid(_narrow(sp), runner, tmp / "g2.jsonl", workers=4, log=None)
+    analyze.analyze(tmp / "runs", tmp / "out", tmp / "g2.jsonl")
+    err = capsys.readouterr().err
+    assert "warning" in err and "space_hash" in err and "differ" in err
+    (tmp / "grid.jsonl.meta.json").unlink()
+    analyze.analyze(tmp / "runs", tmp / "out", tmp / "grid.jsonl")
+    err = capsys.readouterr().err
+    assert "warning" in err and "missing" in err
+
+
+# --- P2c: held-out failures count as zero throughput -----------------------------------------------
+
+def test_heldout_failure_counts_as_zero(setup):
+    """A config great once and failing twice ranks below one decent on every seed; never a tie."""
+    sp, _, tmp = setup
+    great = {**sp.default_config(), "max_num_seqs": 64}
+    decent = {**sp.default_config(), "max_num_seqs": 256}
+
+    def flaky(config, c, seed):
+        r = fake_blis(config, c, seed)
+        if config["max_num_seqs"] == 64:
+            if seed != 1:
+                return {**r, "error": "boom", "metrics": None}
+            r["metrics"]["tokens_per_sec"] *= 0.6  # ~-105 where it succeeds, vs decent ~-42 (C* is far higher at 64)
+        return r
+
+    runner = CachedRunner(None, sp.scenario, tmp / "c", run_fn=flaky)
+    g, d = analyze.rescore_heldout([great, decent], runner)
+    assert g["failures"] == 2 and g["scores"].count(None) == 2
+    assert g["mean_ok"] == g["scores"][0] and g["mean"] == pytest.approx(g["scores"][0] / 3)
+    assert d["failures"] == 0 and d["mean_ok"] == pytest.approx(d["mean"])
+    assert d["mean"] < g["mean"]  # lower is better: decent ranks first
+    assert g["mean_ok"] < d["mean"]  # whereas a mean over successes alone would have ranked great first
+    allfail = analyze.rescore_heldout([{**great, "max_num_seqs": 64, "speculative": True}],
+                                      CachedRunner(None, sp.scenario, tmp / "c2",
+                                                   run_fn=lambda *a: {**fake_blis(*a), "error": "x"}))[0]
+    assert allfail["mean"] == 0.0 and allfail["mean_ok"] is None and allfail["failures"] == 3
+
+    # heldout.md: the flaky config, best by mean_ok, is never a tie or the winner
+    for m, cfg in (("a", great), ("b", decent)):
+        dd = tmp / "runs" / m
+        dd.mkdir(parents=True)
+        pt = TracePoint(5, -1.0, cfg, 1, list(sp.decision(cfg)), -1.0)
+        (dd / "seed-0.json").write_text(Trace([pt], m, 0).to_json())
+    rows = analyze.heldout(tmp / "runs", tmp / "out", 1, runner, sp)
+    by = {r["method"]: r for r in rows}
+    assert by["a"]["failures"] == 2 and not by["a"]["tie"] and by["b"]["tie"]
+    md = (tmp / "out" / "heldout.md").read_text()
+    assert "failures" in md and "mean over successes" in md
+    row_a = next(line for line in md.splitlines() if line.startswith("| a |"))
+    assert "| 2 |" in row_a and "tie" not in row_a.split("|")[8]

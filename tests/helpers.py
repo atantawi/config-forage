@@ -62,3 +62,27 @@ class SyntheticObjective:
             self.evaluations += 1
             self.calls.append(d)
         return ProbeResult(s, None, None, None if s is None else -s, {}, {}, self.runs_per_eval, keys)
+
+
+class Deadline:
+    """`with Deadline(s):` raises TimeoutError if the block runs longer than s seconds (SIGALRM, main
+    thread only), so a pathologically slow call fails the test instead of hanging the suite."""
+
+    def __init__(self, seconds: float):
+        self.seconds = seconds
+
+    def __enter__(self):
+        import signal
+
+        def boom(*_):
+            raise TimeoutError(f"exceeded {self.seconds} s")
+
+        self._old = signal.signal(signal.SIGALRM, boom)
+        signal.setitimer(signal.ITIMER_REAL, self.seconds)
+        return self
+
+    def __exit__(self, *exc):
+        import signal
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, self._old)
+        return False

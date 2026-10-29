@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections import defaultdict
 from collections.abc import Sequence
 from pathlib import Path
@@ -141,12 +142,17 @@ def wilcoxon(a: Sequence[float | None], b: Sequence[float | None], budget: int |
 
 
 def rescore_heldout(top_configs: Sequence[dict], runner, seeds: Sequence[int] = (1, 2, 3)) -> list[dict]:
-    """Probe each config at each held-out workload seed: [{config, scores, mean}] (mean over successes)."""
+    """Probe each config at each held-out workload seed: [{config, scores, mean, failures, mean_ok}].
+    A failed seed counts as score 0.0 (zero throughput, the worst) in `mean`, so a config that fails
+    on some seeds cannot outrank one that succeeds on all; `mean_ok` is the mean over the successes
+    (None if none) and `failures` the count of failed seeds."""
     out = []
     for cfg in top_configs:
         scores = [probe(runner, cfg, runner.scenario, s).score for s in seeds]
         ok = [s for s in scores if s is not None]
-        out.append({"config": cfg, "scores": scores, "mean": float(np.mean(ok)) if ok else None})
+        out.append({"config": cfg, "scores": scores,
+                    "mean": float(np.mean([0.0 if s is None else s for s in scores])),
+                    "failures": len(scores) - len(ok), "mean_ok": float(np.mean(ok)) if ok else None})
     return out
 
 
@@ -184,31 +190,36 @@ def top_configs(ts: Sequence[Trace], n: int, space) -> list[tuple[float, dict]]:
 
 def heldout(runs_dir: Path, out: Path, n: int, runner, space, seeds: Sequence[int] = HELDOUT_SEEDS) -> list[dict]:
     """Rescore each method's top-n distinct configs on held-out workload seeds; write heldout.md.
-    Rows: {method, config, search_score, scores, mean}. A mean within 0.5% of the best mean over
-    all methods is marked a tie."""
+    Rows: {method, config, search_score, scores, mean, failures, mean_ok, tie}; a failed seed counts
+    as 0.0 in mean (see rescore_heldout). A row is a tie when it has no failure and its mean is within
+    0.5% of the best mean over all failure-free rows; a row with a failure is never a tie or winner."""
     by = _by_method(load_traces(runs_dir))
     rows = []
     for m in sorted(by):
         top = top_configs(by[m], n, space)
         for (s, _), r in zip(top, rescore_heldout([c for _, c in top], runner, seeds)):
             rows.append({"method": m, "search_score": s, **r})
-    means = [r["mean"] for r in rows if r["mean"] is not None]
-    best = min(means) if means else None
+    clean = [r["mean"] for r in rows if r["failures"] == 0]
+    best = min(clean) if clean else None
+    for r in rows:
+        r["tie"] = best is not None and r["failures"] == 0 and r["mean"] <= best + TIE_TOL * abs(best)
     lines = [f"# Held-out rescoring: top {n} distinct configs per method, seeds {tuple(seeds)}", "",
-             "Score = -tokens/s per GPU (lower is better); mean over the held-out seeds that succeed. "
-             f"tie = held-out mean within 0.5% of the best held-out mean ({best:.6g})." if best is not None
-             else "No config succeeded on the held-out seeds.", "",
-             "| method | rank | search score | held-out mean | held-out scores | tie | config |",
-             "|---|---|---|---|---|---|---|"]
+             "Score = -tokens/s per GPU (lower is better). held-out mean counts a failed seed as 0 (zero "
+             "throughput); mean over successes ignores failures and is shown for reference only. "
+             + (f"tie = no failure and held-out mean within 0.5% of the best failure-free mean ({best:.6g}); "
+                "a config with a failure is never a tie." if best is not None
+                else "No config succeeded on every held-out seed, so none is a tie."), "",
+             "| method | rank | search score | held-out mean | failures | mean over successes | held-out scores "
+             "| tie | config |",
+             "|---|---|---|---|---|---|---|---|---|"]
     rank: dict[str, int] = defaultdict(int)
     for r in rows:
         rank[r["method"]] += 1
-        tie = best is not None and r["mean"] is not None and r["mean"] <= best + TIE_TOL * abs(best)
         sc = ", ".join("fail" if x is None else f"{x:.6g}" for x in r["scores"])
-        mean = "fail" if r["mean"] is None else f"{r['mean']:.6g}"
+        mean_ok = "fail" if r["mean_ok"] is None else f"{r['mean_ok']:.6g}"
         cfg = json.dumps(r["config"], default=str)
-        lines.append(f"| {r['method']} | {rank[r['method']]} | {r['search_score']:.6g} | {mean} | {sc} | "
-                     f"{'tie' if tie else ''} | `{cfg}` |")
+        lines.append(f"| {r['method']} | {rank[r['method']]} | {r['search_score']:.6g} | {r['mean']:.6g} | "
+                     f"{r['failures']} | {mean_ok} | {sc} | {'tie' if r['tie'] else ''} | `{cfg}` |")
     out.mkdir(parents=True, exist_ok=True)
     (out / "heldout.md").write_text("\n".join(lines) + "\n")
     return rows
@@ -264,6 +275,29 @@ def _plot_runs_to(by: dict[str, list[Trace]], opt: float, budget: int, path: Pat
     plt.close(fig)
 
 
+def check_space_match(runs_dir: Path, grid_path: Path, log=None) -> bool:
+    """Warn (to log) unless the runs manifest and the grid sidecar (<grid>.meta.json) both carry a
+    space_hash and they agree: regret against another space's optimum is meaningless. True if they agree."""
+    def read(p: Path):
+        try:
+            return json.loads(p.read_text()).get("space_hash")
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+    log = sys.stderr if log is None else log
+    runs_h = read(Path(runs_dir) / "manifest.json")
+    grid_h = read(Path(grid_path).with_name(Path(grid_path).name + ".meta.json"))
+    if runs_h is None or grid_h is None:
+        which = " and ".join(w for w, h in (("runs manifest", runs_h), ("grid sidecar", grid_h)) if h is None)
+        print(f"cf-analyze: warning: space_hash missing from the {which}; cannot check that the runs and "
+              f"the grid are of the same space", file=log)
+        return False
+    if runs_h != grid_h:
+        print(f"cf-analyze: warning: space_hash of the runs ({runs_h}) and the grid ({grid_h}) differ: "
+              f"regret is against another space's optimum", file=log)
+        return False
+    return True
+
+
 def analyze(runs_dir: Path, out: Path, grid_path: Path | None = None, budgets: Sequence[int] = BUDGETS) -> str:
     """Write regret.png (best found without a grid), runs_to_1pct.png (grid only) and table.md."""
     raw = load_traces(runs_dir)
@@ -279,6 +313,7 @@ def analyze(runs_dir: Path, out: Path, grid_path: Path | None = None, budgets: S
     lines = [f"# Benchmark: {len(by)} methods, budget {budget} unique BLIS runs", ""]
     refs = [r for r in ("bsa", "tpe") if r in by]
     if grid_path is not None:
+        check_space_match(runs_dir, grid_path)
         opt = optimum(load_grid(grid_path))
         check_not_below(raw, opt)
         tab = regret_table(traces, opt, budgets)

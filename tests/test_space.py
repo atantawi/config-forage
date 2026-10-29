@@ -78,3 +78,19 @@ def test_option_labels_must_be_unique():
         KnobSpace(sc, (Knob("x", (1, "1")),))
     with pytest.raises(ValueError, match="label"):
         KnobSpace(sc, (Knob("x", (1, 1)),))
+
+
+def test_space_hash_is_content_not_bytes(tmp_path):
+    from config_forage.space import space_hash
+    sp = load_space(TINY)
+    h = space_hash(sp)
+    assert len(h) == 64 and h == space_hash(load_space(TINY))
+    noisy = tmp_path / "noisy.yaml"
+    noisy.write_text("# a comment\n\n" + TINY.read_text().replace(", ", ",   "))
+    assert space_hash(load_space(noisy)) == h  # comments and whitespace do not matter
+    other = KnobSpace(sp.scenario, tuple(replace(k, values=k.values[:2]) if k.name == "max_num_seqs" else k
+                                         for k in sp.knobs))
+    assert space_hash(other) != h
+    assert space_hash(KnobSpace(replace(sp.scenario, gpu_budget=8), sp.knobs)) != h
+    assert space_hash(KnobSpace(sp.scenario, tuple(replace(k, default=k.values[-1]) if k.name == "tp" else k
+                                                   for k in sp.knobs))) != h

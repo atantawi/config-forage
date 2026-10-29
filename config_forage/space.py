@@ -4,12 +4,15 @@ Adding a knob is a pure YAML addition; `tp`, `dp`, `enable_expert_parallel` also
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import yaml
 
+from config_forage.bsa.biaser import ApplicabilityBiaser
 from config_forage.bsa.space import Axis, Decision, DecisionSpace
 
 
@@ -92,6 +95,27 @@ class KnobSpace:
     def n_combinations(self) -> int:
         return math.prod(len(k.values) for k in self.knobs)
 
+    def applicability_biaser(self) -> ApplicabilityBiaser | None:
+        """The structural biaser for the knobs' `requires` (None when no knob has one): an axis is
+        left unlabelled where its parent knob does not take a required value. Applicability is
+        structure, not a bias, so BsaSearcher and RandomSearcher always apply it first."""
+        names = self.names
+        req = {m: (names.index(k.requires[0]),
+                   tuple(self.knobs[names.index(k.requires[0])].values.index(v) for v in k.requires[1]))
+               for m, k in enumerate(self.knobs) if k.requires}
+        return ApplicabilityBiaser(self.decision_space, req) if req else None
+
+    def canonical(self, d: Decision) -> Decision:
+        """d with every knob whose `requires` is unmet set to None (unlabelled), in knob order, so a
+        parent that is itself unlabelled also unlabels its dependants. Idempotent."""
+        names, out = self.names, list(d)
+        for i, k in enumerate(self.knobs):
+            if k.requires is not None and out[i] is not None:
+                p = names.index(k.requires[0])
+                if out[p] is None or self.knobs[p].values[out[p]] not in k.requires[1]:
+                    out[i] = None
+        return tuple(out)
+
     def knob_values(self, d: Decision) -> dict:
         """The decision's labelled knob values, typed (no num_instances); defined for any decision."""
         return {k.name: k.values[i] for k, i in zip(self.knobs, d) if i is not None}
@@ -122,6 +146,14 @@ class KnobSpace:
             topo = {n: c[n] for n in ("tp", "dp", "enable_expert_parallel") if n in c}
             raise ValueError(f"default topology {topo} is infeasible for the scenario")
         return self.config(self.decision(c))
+
+
+def space_hash(space: KnobSpace) -> str:
+    """sha256 of the canonical JSON of the parsed scenario and knobs (names, values, requires,
+    defaults, order): what a space means, not its file bytes, so comments and whitespace do not
+    change it. cf-bench and cf-grid store it and refuse to resume into results of another space."""
+    payload = {"scenario": asdict(space.scenario), "knobs": [asdict(k) for k in space.knobs]}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
 def load_space(path: str | Path) -> KnobSpace:

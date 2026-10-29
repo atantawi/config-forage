@@ -1,7 +1,7 @@
 """cf-bench: run each arm at each seed to a budget of unique BLIS runs over one shared cached runner.
 
 Layout: OUT/<arm>/seed-<k>.json (Trace JSON) and OUT/manifest.json; existing traces are skipped.
-A resumed call must use the same budget and options. manifest["calls"] logs each call's new traces,
+A resumed call must use the same space (manifest["space_hash"], see space.space_hash), budget and options. manifest["calls"] logs each call's new traces,
 unique BLIS runs, cache hits and timeouts; manifest["active_rules"] the rules each diagnostic arm can apply."""
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from config_forage.search.base import Searcher, Trace
 from config_forage.search.bsa import BsaSearcher
 from config_forage.search.coord import CoordAscentSearcher, IncumbentSearcher
 from config_forage.search.random import RandomSearcher
-from config_forage.space import KnobSpace, load_space
+from config_forage.space import KnobSpace, load_space, space_hash
 
 
 def _transfer(sp: KnobSpace, o: dict) -> Searcher:
@@ -98,9 +98,12 @@ def bench(space: KnobSpace, runner, arms: list[str], seeds: list[int], budget: i
         raise ValueError("arm bsa-transfer needs the transfer_from option (--transfer-from TRACE.json)")
     if jobs > 1 and opts.get("workers") is None:  # keep jobs x workers threads near the core count
         opts["workers"] = max(1, ((os.cpu_count() or 2) - 1) // jobs)
-    mpath, old = out / "manifest.json", {}
+    mpath, old, sh = out / "manifest.json", {}, space_hash(space)
     if mpath.exists():
         old = json.loads(mpath.read_text())
+        if old.get("space_hash") != sh:
+            raise ValueError(f"{out} holds runs of space_hash {old.get('space_hash')}, not this space's {sh} "
+                             f"(the space changed, or the manifest predates space hashing); use another --out")
         if old.get("budget") != budget:
             raise ValueError(f"{out} holds runs at budget {old.get('budget')}, not {budget}")
         want = {k: str(v) for k, v in opts.items() if k != "workers"}
@@ -120,7 +123,7 @@ def bench(space: KnobSpace, runner, arms: list[str], seeds: list[int], budget: i
                       f"is single-valued, or its signal cannot occur); the arm equals its base arm", file=sys.stderr)
     if old.get("active_rules"):
         active.update({a: r for a, r in old["active_rules"].items() if a not in active})
-    manifest = {"space": space_path, "budget": budget, "arms": all_arms, "seeds": all_seeds,
+    manifest = {"space": space_path, "space_hash": sh, "budget": budget, "arms": all_arms, "seeds": all_seeds,
                 "pins": list(PINS), "git_sha": _git_sha(), "jobs": jobs, "workers": opts.get("workers"),
                 "opts": {k: str(v) for k, v in opts.items() if k != "workers"}, "active_rules": active,
                 "calls": old.get("calls", [])}

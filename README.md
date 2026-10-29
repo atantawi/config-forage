@@ -70,6 +70,16 @@ uv run cf-analyze results/s-mid/runs --grid results/s-mid/grid.jsonl --out resul
 Without `--grid` (a space too large to enumerate), cf-analyze reports the best score found instead of
 regret. `cache/` holds content-addressed BLIS results, so repeated runs are free.
 
+Resuming is guarded by `space_hash` (a hash of the parsed scenario and knobs). cf-bench keeps it in
+`manifest.json`, and cf-grid keeps it with the BLIS pins in `<out>.meta.json`. Each refuses to
+resume into results of another space, so use a fresh `--out` after editing a space. cf-analyze warns
+if the runs and the grid hashes differ. Held-out rescoring counts a failed seed as zero throughput,
+and it reports the failures and the mean over successes.
+
+A knob with `requires` (e.g. `routing_scorers` under `routing_policy: weighted`) is structural: every
+sampler leaves it unlabelled where it does not apply, and the objective canonicalizes decisions, so a
+stray label never costs extra runs.
+
 ## Objective and budget unit
 
 A config is probed by raising the concurrency c (upstream's ladder, then doubling up to 4096) until

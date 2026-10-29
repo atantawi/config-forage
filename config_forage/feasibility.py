@@ -17,7 +17,11 @@ TOPOLOGY = ("tp", "dp", "enable_expert_parallel")
 
 def is_feasible(config: dict, scenario: Scenario) -> bool:
     """Absent tp/dp count as 1, absent EP as false. The weights-fit check is left to BLIS, except for an
-    optional `model_entry.min_footprint`: the smallest tp·dp whose per-rank memory fits (measured)."""
+    optional `model_entry.min_footprint`: the smallest tp·dp whose per-rank memory fits (measured).
+
+    Invariant: the result depends only on the topology knobs (TOPOLOGY) and the scenario, never on
+    another knob. enumerate_feasible, feasible_topologies, FeasibilityBiaser and the SMAC forbiddens
+    rely on it; a rule on another knob must also change them."""
     tp, dp, ep = config.get("tp", 1), config.get("dp", 1), config.get("enable_expert_parallel", False)
     width = tp * dp
     if scenario.model_entry.get("arch") != "MoE" and (dp != 1 or ep):
@@ -38,10 +42,7 @@ class FeasibilityBiaser:
     def __init__(self, space: KnobSpace):
         self.space = space
         names = space.names
-        req = {m: (names.index(k.requires[0]),
-                   tuple(space.knobs[names.index(k.requires[0])].values.index(v) for v in k.requires[1]))
-               for m, k in enumerate(space.knobs) if k.requires}
-        self.applic = ApplicabilityBiaser(space.decision_space, req)
+        self.applic = space.applicability_biaser() or ApplicabilityBiaser(space.decision_space, {})
         self.topo = [(names.index(n), n) for n in TOPOLOGY if n in names]
 
     def factor(self, axis: int, partial: Decision) -> np.ndarray | None:
@@ -59,15 +60,32 @@ class FeasibilityBiaser:
         return f
 
 
+def feasible_topologies(space: KnobSpace) -> list[dict]:
+    """The distinct feasible assignments of the space's topology knobs, as {name: value}, in the
+    order enumerate_feasible first meets them (lexicographic in the space's knob order). Never walks
+    the other knobs: at most 4·4·2 checks. Empty iff the space has no feasible decision."""
+    topo = [k for k in space.knobs if k.name in TOPOLOGY]
+    out = [dict(zip((k.name for k in topo), vs)) for vs in product(*(k.values for k in topo))]
+    return [t for t in out if is_feasible(t, space.scenario)]
+
+
 def enumerate_feasible(space: KnobSpace) -> Iterator[Decision]:
-    """Every feasible decision, conditional knobs left unlabelled (None) where they do not apply."""
+    """Every feasible decision, conditional knobs left unlabelled (None) where they do not apply.
+
+    DFS in knob order. Since is_feasible depends only on the topology knobs, a branch is pruned as
+    soon as the last topology knob (in knob order) is decided and its topology prefix is infeasible;
+    no leaf check is needed. The output and its order equal filtering every leaf."""
     names = space.names
+    topo = [i for i, n in enumerate(names) if n in TOPOLOGY]
+    check_at = max(topo) + 1 if topo else 0  # depth at which every topology knob is decided
 
     def rec(d: tuple):
         i = len(d)
+        if i == check_at and not is_feasible({names[m]: space.knobs[m].values[d[m]] for m in topo},
+                                             space.scenario):
+            return
         if i == len(space.knobs):
-            if is_feasible({k.name: k.values[j] for k, j in zip(space.knobs, d) if j is not None}, space.scenario):
-                yield d
+            yield d
             return
         k = space.knobs[i]
         if k.requires is not None:

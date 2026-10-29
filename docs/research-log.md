@@ -135,3 +135,37 @@ so the benchmark needed no new BLIS runs).
   not the large-space claim. The claim needs S-large (4.6 × 10⁷ configs), where there is no grid
   and the methods are compared on best-found. It also needs a space where the diagnostic rules
   have live knobs.
+
+## 2026-10-28 — PR #1 review fixes
+
+Four findings from the PR #1 review, one commit each.
+
+- **P1. Enumeration on S-large was pathologically slow.** `enumerate_feasible` checked feasibility
+  only at the leaves, so finding the first feasible S-large decision walked tens of millions of
+  invalid leaves (it did not finish in 5 s). `is_feasible` depends only on the topology knobs and the
+  scenario (now a documented invariant), so the DFS prunes at the depth where the last topology knob
+  is decided. The first S-large decision now takes ~25 µs. Output and order are unchanged (tested
+  against the leaf filter). The new `feasible_topologies(space)` lists the distinct feasible topology
+  prefixes. Every searcher's empty-space check and the incumbent's phase 1 use it, so none of them
+  walks full decisions.
+- **P2a. Plain BSA ignored applicability.** The `bsa` arm (and random with feasible_only=False) had
+  no biaser, so on S-large it labelled `routing_scorers` under non-weighted routing. That gave
+  aliased configs and wasted budget. Applicability is structure, not a bias:
+  `KnobSpace.applicability_biaser()` now always comes first, internally, in BsaSearcher and
+  RandomSearcher. Their `biasers` attribute still lists only the given biasers. As a backstop,
+  `Objective` canonicalizes each decision (`KnobSpace.canonical`): a stray label gets its unlabelled
+  twin's cache keys.
+- **P2b. Resume did not detect a changed space.** `space_hash(space)` is a sha256 of the parsed
+  scenario and knobs (comments and whitespace do not count). cf-bench stores it in the manifest and
+  refuses to resume into another hash, or into no hash. cf-grid writes `<out>.meta.json` with the
+  hash and the BLIS pins, and refuses to resume when that sidecar differs, or is missing while the
+  grid has rows. cf-analyze `--grid` warns when the runs' hash and the grid's hash differ, or when
+  either is missing.
+- **P2c. Held-out means ignored failed seeds.** A failed seed now counts as 0 (zero throughput) in
+  the held-out mean. Rows also report `failures` and `mean_ok` (the mean over successes), and a
+  config with any failure is never a tie or the winner in heldout.md.
+
+**S-mid v2 results (results/s-mid3) are unaffected:** that space has no `requires` (P2a), P1
+changes speed only, and P2b adds protection only. Its manifest and grid predate space hashing,
+so resuming into them is now refused (start a fresh `--out`). cf-analyze on them warns that the
+hash is missing.

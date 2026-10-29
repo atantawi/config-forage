@@ -6,7 +6,7 @@ import warnings
 
 import optuna
 
-from config_forage.feasibility import enumerate_feasible, is_feasible
+from config_forage.feasibility import feasible_topologies, is_feasible
 from config_forage.search.base import Recorder, Trace
 from config_forage.space import KnobSpace
 
@@ -32,7 +32,7 @@ class TpeSearcher:
         self.space, self.multivariate, self.n_startup, self.name = space, multivariate, n_startup, name
 
     def search(self, objective, budget: int, seed: int) -> Trace:
-        if next(enumerate_feasible(self.space), None) is None:
+        if not feasible_topologies(self.space):
             raise ValueError(f"no feasible decision in the space for scenario {self.space.scenario}")
         sampler = optuna.samplers.TPESampler(multivariate=self.multivariate, group=self.multivariate,
                                              n_startup_trials=self.n_startup, seed=seed)

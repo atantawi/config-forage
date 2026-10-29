@@ -166,3 +166,16 @@ def test_uniform_bsa_never_calls_blis_on_infeasible(tmp_path):
     BsaSearcher(sp, [], batch=8, workers=2).search(obj, 60, 0)
     assert calls and all(is_feasible(c, sc) for c, _ in calls)
     assert obj.runs_used > r.unique_runs  # the infeasible samples were charged, synthetically
+
+
+def test_objective_canonicalizes_stray_labels(tmp_path):
+    from pathlib import Path
+
+    from config_forage.space import load_space
+    sp = load_space(Path(__file__).parent / "data" / "tiny-space.yaml")
+    r = CachedRunner(None, sp.scenario, tmp_path, run_fn=fake())
+    stray, twin = (1, 0, 0, 0, 0, 1), (1, 0, 0, 0, 0, None)  # num_speculative_tokens set, speculative off
+    a, b = Objective(sp, r)(stray), Objective(sp, r)(twin)
+    assert a.keys == b.keys and a.score == b.score
+    bad, bad_twin = (0, 0, 1, 0, 0, 0), (0, 0, 1, 0, 0, None)  # infeasible (EP at width 1), stray label
+    assert Objective(sp, r)(bad).keys == Objective(sp, r)(bad_twin).keys

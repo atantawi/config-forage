@@ -66,3 +66,68 @@ def test_enumerate_feasible_matches_filter():
         want.add(tuple(d))
     want = {d for d in want if is_feasible(sp.knob_values(d), sp.scenario)}
     assert got == want and len(got) > 0
+
+
+# --- P1: pruning on the topology prefix ------------------------------------------------------------
+
+SPACES = Path(__file__).resolve().parent.parent / "spaces"
+MID = SPACES / "glm53flash-h100-chatbot-16.yaml"
+LARGE = SPACES / "glm53flash-h100-chatbot-16-large.yaml"
+
+
+def _brute(sp):
+    """The pre-pruning enumeration: every applicability-consistent leaf in DFS order, then filtered."""
+    names = sp.names
+
+    def rec(d):
+        i = len(d)
+        if i == len(sp.knobs):
+            if is_feasible(sp.knob_values(d), sp.scenario):
+                yield d
+            return
+        k = sp.knobs[i]
+        if k.requires is not None:
+            j = d[names.index(k.requires[0])]
+            if j is None or sp.knobs[names.index(k.requires[0])].values[j] not in k.requires[1]:
+                yield from rec(d + (None,))
+                return
+        for j in range(len(k.values)):
+            yield from rec(d + (j,))
+
+    return list(rec(()))
+
+
+def _topology_last(sp):
+    """The same space with the topology knobs moved after every other knob."""
+    from config_forage.feasibility import TOPOLOGY
+    from config_forage.space import KnobSpace
+    return KnobSpace(sp.scenario, tuple([k for k in sp.knobs if k.name not in TOPOLOGY]
+                                        + [k for k in sp.knobs if k.name in TOPOLOGY]))
+
+
+def test_enumerate_feasible_order_unchanged():
+    for sp in (load_space(TINY), load_space(MID), _topology_last(load_space(TINY))):
+        assert list(enumerate_feasible(sp)) == _brute(sp)
+
+
+def test_enumerate_feasible_first_on_s_large_is_fast():
+    from helpers import Deadline
+    sp = load_space(LARGE)
+    with Deadline(0.5):
+        d = next(enumerate_feasible(sp))
+    assert is_feasible(sp.knob_values(d), sp.scenario)
+
+
+def test_feasible_topologies():
+    from config_forage.feasibility import feasible_topologies
+    from helpers import Deadline
+    for sp in (load_space(TINY), load_space(MID), _topology_last(load_space(TINY))):
+        want = []
+        for d in _brute(sp):
+            t = {n: v for n, v in sp.knob_values(d).items() if n in ("tp", "dp", "enable_expert_parallel")}
+            if t not in want:
+                want.append(t)
+        assert feasible_topologies(sp) == want
+    with Deadline(0.5):
+        ts = feasible_topologies(load_space(LARGE))
+    assert ts and all(t["tp"] * t["dp"] == 8 for t in ts)

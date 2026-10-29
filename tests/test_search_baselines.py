@@ -76,3 +76,20 @@ def test_tpe_records_pruned_positions():
     assert pa == sorted(pa) and pp == sorted(pp) and all(0 <= k <= len(t.points) for k in pp)
     for q, k in zip(pa, pp):  # runs_used at a prune = runs of the last point recorded before it
         assert q == (t.points[k - 1].runs if k else 0)
+
+
+def test_searcher_startup_on_s_large_is_fast():
+    """Construct + the empty-space check (+ topology enumeration for incumbent) at budget 0."""
+    from config_forage.feasibility import FeasibilityBiaser
+    from config_forage.search.bsa import BsaSearcher
+    from config_forage.search.coord import IncumbentSearcher
+    from config_forage.search.random import RandomSearcher
+    from helpers import Deadline
+    sp = load_space(Path(__file__).resolve().parent.parent / "spaces" / "glm53flash-h100-chatbot-16-large.yaml")
+    makers = [lambda: BsaSearcher(sp, [FeasibilityBiaser(sp)]), lambda: BsaSearcher(sp),
+              lambda: RandomSearcher(sp), lambda: RandomSearcher(sp, feasible_only=False),
+              lambda: TpeSearcher(sp), lambda: SmacSearcher(sp), lambda: IncumbentSearcher(sp)]
+    with Deadline(15):
+        for make in makers:
+            t = make().search(SyntheticObjective(sp, lambda c: -1.0), 0, 0)
+            assert t.points == []

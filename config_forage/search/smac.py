@@ -13,7 +13,7 @@ from smac import HyperparameterOptimizationFacade, Scenario
 from smac.runhistory.dataclasses import TrialValue
 from smac.runhistory.enumerations import StatusType
 
-from config_forage.feasibility import TOPOLOGY, enumerate_feasible, is_feasible
+from config_forage.feasibility import TOPOLOGY, feasible_topologies, is_feasible
 from config_forage.search.base import Recorder, Trace
 from config_forage.space import KnobSpace
 
@@ -51,7 +51,7 @@ class SmacSearcher:
         self.space, self.n_init, self.name = space, n_init, name
 
     def search(self, objective, budget: int, seed: int) -> Trace:
-        if next(enumerate_feasible(self.space), None) is None:
+        if not feasible_topologies(self.space):
             raise ValueError(f"no feasible decision in the space for scenario {self.space.scenario}")
         with tempfile.TemporaryDirectory() as tmp:
             sc = Scenario(to_configspace(self.space), deterministic=True, n_trials=1_000_000, seed=seed,

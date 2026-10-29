@@ -1,4 +1,7 @@
-"""cf-grid: probe every feasible decision once; one JSON line per config, resumable by decision."""
+"""cf-grid: probe every feasible decision once; one JSON line per config, resumable by decision.
+
+A sidecar OUT.meta.json holds the space_hash and the BLIS pins; a resume into a grid whose sidecar
+differs, or that has rows but no sidecar, is refused."""
 
 from __future__ import annotations
 
@@ -10,14 +13,36 @@ import time
 from pathlib import Path
 
 from config_forage.bench.analyze import load_grid
-from config_forage.blis.runner import BlisEnv, CachedRunner, run_batch
+from config_forage.blis.runner import PINS, BlisEnv, CachedRunner, run_batch
 from config_forage.feasibility import enumerate_feasible
 from config_forage.probe import probe
-from config_forage.space import KnobSpace, load_space
+from config_forage.space import KnobSpace, load_space, space_hash
 
 
 def _key(d) -> str:
     return json.dumps(list(d))
+
+
+def meta_path(out: Path) -> Path:
+    """The sidecar of grid file `out`: <out>.meta.json."""
+    out = Path(out)
+    return out.with_name(out.name + ".meta.json")
+
+
+def _check_meta(space: KnobSpace, out: Path, rows: int) -> dict:
+    """The sidecar this grid must carry; raise if an existing grid's sidecar differs or is missing."""
+    want, mp = {"space_hash": space_hash(space), "pins": list(PINS)}, meta_path(out)
+    if mp.exists():
+        have = json.loads(mp.read_text())
+        bad = [k for k in want if have.get(k) != want[k]]
+        if bad:
+            raise ValueError(f"{out} was probed with other {' and '.join(bad)}: "
+                             + "; ".join(f"{k} {have.get(k)} there, {want[k]} now" for k in bad)
+                             + "; use a fresh --out")
+    elif rows:
+        raise ValueError(f"{out} holds {rows} rows but no sidecar {mp.name}, so its space and pins are "
+                         f"unknown (this space_hash is {want['space_hash']}); use a fresh --out")
+    return want
 
 
 def grid(space: KnobSpace, runner, out: Path, workers: int | None = None, log=sys.stderr) -> dict:
@@ -26,11 +51,13 @@ def grid(space: KnobSpace, runner, out: Path, workers: int | None = None, log=sy
     t0, out = time.monotonic(), Path(out)
     # a line cut short by a kill is skipped and its config re-probed (the cache makes that free)
     done = {_key(r["decision"]): r for r in load_grid(out)} if out.exists() else {}
+    meta = _check_meta(space, out, len(done))
     todo = [d for d in enumerate_feasible(space) if _key(d) not in done]
     runs0, hits0 = runner.unique_runs, runner.cache_hits
     lock, count = threading.Lock(), [0]
     step = max(1, len(todo) // 20)
     out.parent.mkdir(parents=True, exist_ok=True)
+    meta_path(out).write_text(json.dumps(meta, indent=2))
     with out.open("a") as f:
         if out.stat().st_size and not out.read_bytes().endswith(b"\n"):
             f.write("\n")  # end a line cut short by a kill before appending

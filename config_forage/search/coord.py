@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from config_forage.feasibility import TOPOLOGY, enumerate_feasible, is_feasible
+from config_forage.feasibility import TOPOLOGY, feasible_topologies, is_feasible
 from config_forage.search.base import Recorder, Trace
 from config_forage.space import KnobSpace
 
@@ -49,12 +49,7 @@ class IncumbentSearcher:
 
     def search(self, objective, budget: int, seed: int) -> Trace:
         sp = self.space
-        topo_idx = [i for i, k in enumerate(sp.knobs) if k.name in TOPOLOGY]
-        topos: list[dict] = []
-        for d in enumerate_feasible(sp):
-            t = {sp.knobs[i].name: sp.knobs[i].values[d[i]] for i in topo_idx if d[i] is not None}
-            if t not in topos:
-                topos.append(t)
+        topos = feasible_topologies(sp)  # topology prefixes only: never walks the full space
         ev = _Eval(sp, objective, budget)
         scored = []
         for t in topos:

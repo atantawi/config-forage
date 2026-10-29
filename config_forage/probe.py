@@ -127,7 +127,10 @@ class Objective:
 
     A decision that fails is_feasible (the topology rules, which include width > the GPU budget) is
     not sent to BLIS: it scores None, charged one run (`infeasible_result`). So a searcher without
-    the feasibility biaser pays for an infeasible sample as it would for a BLIS rejection at c = 1."""
+    the feasibility biaser pays for an infeasible sample as it would for a BLIS rejection at c = 1.
+
+    The decision is first canonicalized (space.canonical: a knob whose `requires` is unmet becomes
+    None), so a stray label gets the cache keys of its unlabelled twin and never costs extra runs."""
 
     def __init__(self, space: KnobSpace, runner):
         self.space, self.runner = space, runner
@@ -142,6 +145,7 @@ class Objective:
 
     def __call__(self, d: Decision) -> ProbeResult:
         from config_forage.feasibility import is_feasible
+        d = self.space.canonical(d)
         knobs, sc = self.space.knob_values(d), self.runner.scenario
         if is_feasible(knobs, sc):
             p = probe(self.runner, self.space.config(d), sc)
