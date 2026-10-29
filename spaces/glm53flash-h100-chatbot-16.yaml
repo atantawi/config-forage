@@ -1,7 +1,10 @@
-# S-mid: glm-5.3-flash (MoE, 288 routed experts, 64 KV heads; catalog 0.2.1) on 16 H100s, chatbot,
-# ITL p99 <= 20 ms, headroom 0.8. fp8 weights as in upstream's glm run.
-# v2 (enriched): + block_size, scheduler, preemption_policy, admission_policy; axes under 1% at every
-# probed base are pinned to one value (docs/experiments/s-mid-grid.md). v1 = tp x dp x EP x engine axes.
+# S-mid v3 (BLIS v0.14.0, engine 0.29.0): glm-5.3-flash (MoE, 64 KV heads; catalog 0.3.0) on 16 H100s,
+# chatbot, ITL p99 <= 20 ms, headroom 0.8. fp8 weights as in upstream's glm run.
+# v3: routing through the embedded llm-d router (endpoint_picker_config family + scorer weights; the
+# BLIS-native routing/admission flags are gone), multi-node instances (width 16 = 2 whole nodes), DP
+# load balancing. Axes under 1% at every probed base are pinned (docs/experiments/s-mid-v3-screen.md):
+# cache_dtype, gpu_memory_utilization, max_num_batched_tokens, block_size, scheduler, preemption_policy,
+# queue and prefix-cache scorer weights. v2 (BLIS v0.10.0) = git show c3473d1:spaces/glm53flash-h100-chatbot-16.yaml
 scenario:
   model: glm-5.3-flash
   hardware: h100
@@ -12,19 +15,19 @@ scenario:
   headroom: 0.8
   seed: 0
   num_requests_base: 80
-  model_entry: {arch: MoE, heads_kv: 64, min_footprint: 8}  # weights fit only at tp·dp = 8 (BLIS memory model)
+  model_entry: {arch: MoE, heads_kv: 64, min_footprint: 8}  # weights fit only from tp·dp = 8 (BLIS memory model)
 knobs:
-  - {name: tp, values: [1, 2, 4, 8], default: 8}
-  - {name: dp, values: [1, 2, 4, 8], default: 1}
+  - {name: tp, values: [1, 2, 4, 8, 16], default: 8}
+  - {name: dp, values: [1, 2, 4, 8, 16], default: 1}
   - {name: enable_expert_parallel, values: [false, true], default: true}
+  - {name: data_parallel_load_balancing, values: [internal, external], default: internal, requires: [dp, [2, 4, 8, 16]]}
   - {name: quantization, values: [fp8]}
-  # pinned: < 1% at every probed base (v1 had {auto, fp8} / {32, 256} / {0.7, 0.8, 0.9, 0.95})
+  # pinned: < 1% at every probed base
   - {name: cache_dtype, values: [fp8]}
-  - {name: max_num_seqs, values: [256]}
   - {name: gpu_memory_utilization, values: [0.9]}
-  - {name: max_num_batched_tokens, values: [1024, 2048, 4096, 8192], default: 8192}  # 16384/32768 = 8192 everywhere probed
-  - {name: block_size, values: [16, 32, 64, 128], default: 64}
-  - {name: scheduler, values: [fcfs, priority-fcfs, sjf], default: fcfs}  # reverse-priority = priority-fcfs where probed
-  - {name: preemption_policy, values: [fcfs, priority], default: fcfs}
-  - {name: admission_policy, values: [always-admit, tier-shed], default: always-admit}
-  - {name: routing_policy, values: [round-robin, least-loaded, weighted], default: round-robin}
+  - {name: max_num_batched_tokens, values: [8192]}
+  - {name: block_size, values: [64]}
+  - {name: max_num_seqs, values: [32, 64, 128, 256, 512], default: 256}
+  - {name: endpoint_picker_config, values: [load-only, inflight-load, prefix-affinity], default: load-only}
+  - {name: kv_cache_utilization_scorer_weight, values: [0, 1, 2, 4], default: 1}
+  - {name: active_request_scorer_weight, values: [0, 1, 2, 4], default: 2, requires: [endpoint_picker_config, [inflight-load]]}

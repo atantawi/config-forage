@@ -4,8 +4,8 @@ BSA (biased sampling) search over LLM serving configurations, scored by the
 [BLIS](https://github.com/inference-sim/inference-sim) simulator.
 
 Given a model, a GPU type, a GPU budget, a workload and a latency SLO, config-forage searches the
-deployment space (topology `tp`/`dp`/expert parallelism, vLLM engine knobs, router and admission
-policies) for the configuration with the highest SLO-feasible throughput per GPU. The search is a
+deployment space (topology `tp`/`dp`/expert parallelism, single- or multi-node, vLLM engine knobs,
+the llm-d router's configuration) for the configuration with the highest SLO-feasible throughput per GPU. The search is a
 categorical generator with a smoothed elite update, steered by product-of-experts *biasers*: exact
 topology feasibility, diagnostic rules read from BLIS output, and a prior transferred from an
 earlier search. The repo also ships the baselines (random, Optuna TPE, SMAC3, the upstream
@@ -27,8 +27,10 @@ uv run pytest -q          # unit tests; the BLIS-marked tests skip without BLIS
 
 ## BLIS setup
 
-The pinned stack is inference-sim v0.10.0 (`0d092d4`, latency kernel v0.1.0), blis-catalog 0.2.1 and
-blis-registry v0.1.1. Go is required to build the simulator.
+The pinned stack is inference-sim v0.14.0 (`f2ba6bb`, latency kernel v0.4.0, blis-vllm v0.32.0),
+blis-catalog 0.3.0 and blis-registry v0.2.0. Spaces run `engine_version: "0.29.0"`. Go ≥ 1.27.2 is
+required to build the simulator. Results from the earlier v0.10.0 stack (S-mid v2, `results/s-mid3`)
+are kept as an archive. Their cache keys carry the old pins, so they never mix with new runs.
 
 ```sh
 scripts/setup_blis.sh ../blis-stack     # clones, verifies the pinned commits, builds; idempotent
@@ -79,9 +81,23 @@ cf-analyze warns, in table.md too, when the traces span several revisions or a d
 refuses runs and a grid whose hashes differ, and warns when either hash is missing. Held-out rescoring counts a failed seed as zero throughput,
 and it reports the failures and the mean over successes.
 
-A knob with `requires` (e.g. `routing_scorers` under `routing_policy: weighted`) is structural: every
+A knob with `requires` (e.g. `active_request_scorer_weight` under
+`endpoint_picker_config: inflight-load`) is structural: every
 sampler leaves it unlabelled where it does not apply, and the objective canonicalizes decisions, so a
 stray label never costs extra runs.
+
+## Router knobs
+
+BLIS (from v0.12.0) routes only through the embedded llm-d router, which an EndpointPickerConfig
+configures. A space states it with flat knobs (`config_forage/router.py`):
+
+- `endpoint_picker_config` picks a family: `load-only`, `inflight-load` or `prefix-affinity`. These
+  are the configs BLIS ships in `examples/llm-d`.
+- `<scorer>_weight` knobs override that family's scorer weights, e.g.
+  `kv_cache_utilization_scorer_weight` or `active_request_scorer_weight`.
+
+The runner writes the resulting config next to the scenario. The cache key covers that config, not
+just the knob values. `routing_policy`, `routing_scorers` and `admission_policy` are refused.
 
 ## Objective and budget unit
 
@@ -116,8 +132,9 @@ analyses and full benchmark tables.
 ## Caveats
 
 - Simulation only. Scores are BLIS predictions at the pinned stack, not measurements on hardware.
-- One instance must fit one node (tp·dp ≤ 8 GPUs), as in upstream's topology rules. BLIS will price
-  multi-node instances, which can score higher; they are outside the space by definition.
+- Multi-node instances (tp·dp a multiple of 8 above one node, over an `ib-400g` fabric) are in the
+  space. BLIS prices them, but the accuracy dashboard does not score multi-node points against
+  hardware, so they are less validated than single-node ones.
 - The S-mid ground truth is one scenario (glm-5.3-flash, 16 H100, chatbot). Its signal is mostly
   topology × routing, the upstream incumbent heuristic gets within 1% there, and the diagnostic
   biaser has no active rule in it (see the research log). Results do not generalize beyond it

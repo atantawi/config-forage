@@ -29,7 +29,7 @@ def main() -> None:
     sp = load_space(a.space)
     runner = CachedRunner(BlisEnv.from_env(), sp.scenario, a.cache)
     base = {k: v for k, v in sp.default_config().items() if k != "num_instances"}
-    base.update(json.loads(a.base))
+    base = _normalize(sp, {**base, **json.loads(a.base)})  # an override may switch a gated knob on or off
     jobs = [("(base)", None)]
     gated_off = [k.name for k in sp.knobs if k.name not in base]
     for k in sp.knobs:
