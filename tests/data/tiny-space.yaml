@@ -1,0 +1,10 @@
+scenario: {model: tiny-moe, hardware: h100, workload: chatbot, gpu_budget: 16,
+           engine_version: "0.29.0", slo: {itl_p99_ms: 20}, headroom: 0.8, seed: 0,
+           model_entry: {arch: MoE, heads_kv: 8}}
+knobs:
+  - {name: tp, values: [1, 2, 4, 8], default: 2}
+  - {name: dp, values: [1, 2, 4, 8], default: 1}
+  - {name: enable_expert_parallel, values: [false, true], default: false}
+  - {name: max_num_seqs, values: [64, 128, 256], default: 128}
+  - {name: speculative, values: [false, true]}
+  - {name: num_speculative_tokens, values: [1, 3], requires: [speculative, [true]]}
