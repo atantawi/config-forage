@@ -20,6 +20,13 @@ class InfeasibleSample(RuntimeError):
 Scheme = Literal["hard", "boltzmann", "rank"]
 
 
+def default_eps(space: DecisionSpace, eps: float = 0.02) -> float:
+    """eps, capped at half the uniform mass of the widest axis: min(eps, 0.5 / max axis size). The
+    update P = eps + (1 - n*eps) q needs eps * n < 1 on every axis, so a wide axis (100 options, say)
+    still works with the default. Any space whose widest axis has at most 25 options keeps eps."""
+    return min(eps, 0.5 / max(space.sizes, default=1))
+
+
 class CategoricalGenerator:
     """`scheme` picks the elite update:
 
@@ -35,6 +42,16 @@ class CategoricalGenerator:
                  scheme: Scheme = "hard", q: float = 0.5, c: float = 1.0, min_ess: float = 2.0):
         if scheme not in ("hard", "boltzmann", "rank"):
             raise ValueError(f"unknown scheme {scheme!r}")
+        if not 0 < alpha <= 1:
+            raise ValueError(f"alpha must be in (0, 1], not {alpha}")
+        if not 0 < rho <= 1:
+            raise ValueError(f"rho must be in (0, 1], not {rho}")
+        if not eps >= 0:
+            raise ValueError(f"eps must be non-negative, not {eps}")
+        for a, n in zip(space.axes, space.sizes):  # P = eps + (1 - n*eps) q is a distribution iff eps * n < 1
+            if not eps * n < 1:
+                raise ValueError(f"eps {eps} is too large for axis {a.name!r} with {n} options: eps * {n} must "
+                                 f"be < 1, so eps < {1 / n:.6g} (default_eps(space) gives {default_eps(space)})")
         if not 0 < q <= 1:
             raise ValueError(f"q must be in (0, 1], not {q}")
         if not c > 0:

@@ -1,21 +1,25 @@
 """cf-bench: run each arm at each seed to a budget of unique BLIS runs over one shared cached runner.
 
 Layout: OUT/<arm>/seed-<k>.json (Trace JSON) and OUT/manifest.json; existing traces are skipped.
-A resumed call must use the same space (manifest["space_hash"], see space.space_hash), budget and options. manifest["calls"] logs each call's new traces,
-unique BLIS runs, cache hits and timeouts; manifest["active_rules"] the rules each diagnostic arm can apply."""
+A resumed call must use the same space (manifest["space_hash"], see space.space_hash), BLIS pins
+(manifest["pins"] = runner.PINS), budget and options. The code revision may differ: each trace records
+extra["provenance"] = {git_sha, dirty, pins} of the call that wrote it, manifest["git_sha"] stays that of
+the first call, and manifest["calls"] logs each call's git_sha, dirty, arms, seeds, time, new traces,
+unique BLIS runs, cache hits and timeouts. manifest["active_rules"] holds the rules each diagnostic arm
+can apply."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import subprocess
 import sys
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 
+import config_forage.bench as _pkg
 from config_forage.biasers import DEFAULT_RULES, DiagnosticBiaser, TransferPrior
 from config_forage.blis.runner import PINS, BlisEnv, CachedRunner
 from config_forage.feasibility import FeasibilityBiaser
@@ -70,14 +74,6 @@ def parse_seeds(s: str) -> list[int]:
     return sorted(out)
 
 
-def _git_sha() -> str | None:
-    try:
-        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=Path(__file__).parent, capture_output=True,
-                              text=True, check=True).stdout.strip() or None
-    except (OSError, subprocess.CalledProcessError):
-        return None
-
-
 def run_one(space: KnobSpace, runner, arm: str, seed: int, budget: int, opts: dict) -> Trace:
     """A fresh searcher and a fresh Objective over the shared runner; stop reason filled if absent."""
     t = ARMS[arm](space, opts).search(Objective(space, runner), budget, seed)
@@ -104,6 +100,9 @@ def bench(space: KnobSpace, runner, arms: list[str], seeds: list[int], budget: i
         if old.get("space_hash") != sh:
             raise ValueError(f"{out} holds runs of space_hash {old.get('space_hash')}, not this space's {sh} "
                              f"(the space changed, or the manifest predates space hashing); use another --out")
+        if old.get("pins") != list(PINS):
+            raise ValueError(f"{out} holds runs made with BLIS pins {old.get('pins')}, not this stack's "
+                             f"{list(PINS)}; resuming would mix simulator versions, so use a fresh --out")
         if old.get("budget") != budget:
             raise ValueError(f"{out} holds runs at budget {old.get('budget')}, not {budget}")
         want = {k: str(v) for k, v in opts.items() if k != "workers"}
@@ -123,8 +122,11 @@ def bench(space: KnobSpace, runner, arms: list[str], seeds: list[int], budget: i
                       f"is single-valued, or its signal cannot occur); the arm equals its base arm", file=sys.stderr)
     if old.get("active_rules"):
         active.update({a: r for a, r in old["active_rules"].items() if a not in active})
+    git = _pkg.git_state()
+    prov = {**git, "pins": list(PINS)}
     manifest = {"space": space_path, "space_hash": sh, "budget": budget, "arms": all_arms, "seeds": all_seeds,
-                "pins": list(PINS), "git_sha": _git_sha(), "jobs": jobs, "workers": opts.get("workers"),
+                "pins": list(PINS), "git_sha": old.get("git_sha") if old else git["git_sha"],  # the first call's
+                "jobs": jobs, "workers": opts.get("workers"),
                 "opts": {k: str(v) for k, v in opts.items() if k != "workers"}, "active_rules": active,
                 "calls": old.get("calls", [])}
     mpath.write_text(json.dumps(manifest, indent=2))
@@ -134,6 +136,7 @@ def bench(space: KnobSpace, runner, arms: list[str], seeds: list[int], budget: i
     def one(job):
         a, s = job
         t = run_one(space, runner, a, s, budget, opts)
+        t.extra["provenance"] = dict(prov)
         p = out / a / f"seed-{s}.json"
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_suffix(".tmp")
@@ -147,7 +150,8 @@ def bench(space: KnobSpace, runner, arms: list[str], seeds: list[int], budget: i
         with ThreadPoolExecutor(max_workers=jobs) as ex:
             new = list(ex.map(one, todo))
     # per call: BLIS runs, cache hits and timeouts (rc -1) on the shared runner
-    manifest["calls"].append({"new_traces": len(new),
+    manifest["calls"].append({**git, "arms": list(arms), "seeds": list(seeds), "time": _pkg.now(),
+                              "new_traces": len(new),
                               **{k: getattr(runner, k, 0) - v for k, v in c0.items()}})
     mpath.write_text(json.dumps(manifest, indent=2))
     return new

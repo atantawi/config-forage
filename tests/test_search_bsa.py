@@ -161,3 +161,46 @@ def test_trace_from_old_json_lacking_decision_and_score():
            "method": "x", "seed": 0, "extra": {}}
     (p,) = Trace.from_json(json.dumps(old)).points
     assert p.decision is None and p.score is None and p.best_score == -1.0
+
+
+# --- review 2, finding 3: wide axes work with the default eps -----------------------------------------
+
+def _wide_space():
+    from config_forage.space import Knob, KnobSpace, Scenario
+    sc = Scenario("synthetic", "h100", "chatbot", 8, "0.29.0")
+    return KnobSpace(sc, (Knob("a", tuple(range(6))), Knob("w", tuple(range(100)))))
+
+
+def test_bsa_on_a_100_option_axis_keeps_P_a_distribution():
+    sp = _wide_space()
+    s = BsaSearcher(sp, batch=16)
+    t = s.search(SyntheticObjective(sp, lambda c: float(abs(c["w"] - 37) + c["a"])), 200, 0)
+    assert t.points and len(s.history) > 3
+    for h in s.history:
+        for p in h["P"]:
+            assert min(p) >= 0 and abs(sum(p) - 1) < 1e-9
+    assert s.eps == 0.005  # default_eps: 0.5 / 100
+    assert all(min(h["P"][1]) >= 0.005 - 1e-12 for h in s.history)
+
+
+def test_random_on_a_100_option_axis():
+    sp = _wide_space()
+    t = RandomSearcher(sp, feasible_only=False).search(SyntheticObjective(sp, lambda c: 0.0), 50, 0)
+    assert t.points
+
+
+def test_default_eps_is_unchanged_on_s_mid_and_s_large():
+    """Both shipped spaces keep eps = 0.02 (max axis 4 and 9, and 0.5 / 9 > 0.02), so BSA is
+    bit-identical to the explicit eps = 0.02 there."""
+    from pathlib import Path
+
+    from config_forage.bsa.generator import default_eps
+    from config_forage.space import load_space
+    spaces = Path(__file__).resolve().parent.parent / "spaces"
+    for f, widest in (("glm53flash-h100-chatbot-16.yaml", 4), ("glm53flash-h100-chatbot-16-large.yaml", 9)):
+        sp = load_space(spaces / f)
+        assert max(sp.decision_space.sizes) == widest and default_eps(sp.decision_space) == 0.02
+    sp = synthetic_space()
+    a = BsaSearcher(sp).search(SyntheticObjective(sp), 120, 3)
+    b = BsaSearcher(sp, eps=0.02).search(SyntheticObjective(sp), 120, 3)
+    assert a.to_json() == b.to_json()

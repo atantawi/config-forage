@@ -169,3 +169,26 @@ Four findings from the PR #1 review, one commit each.
 changes speed only, and P2b adds protection only. Its manifest and grid predate space hashing,
 so resuming into them is now refused (start a fresh `--out`). cf-analyze on them warns that the
 hash is missing.
+
+## 2026-10-29 — PR #1 second review fixes
+
+Three findings from the second PR #1 review, one commit each.
+
+- **Resume ignored the pins and the code revision.** cf-bench now refuses to resume when the
+  manifest's BLIS pins differ from `runner.PINS` (the cf-grid sidecar already did; now tested). The
+  code revision is recorded rather than checked, so resuming stays useful while the code changes:
+  each trace gets `extra["provenance"]` = {git_sha, dirty, pins}, the manifest keeps the first
+  call's `git_sha` and logs {git_sha, dirty, arms, seeds, time} per call (the cf-grid sidecar logs
+  git state per call too), and cf-analyze warns, on stderr and in table.md, when the traces span
+  more than one revision or any came from a dirty checkout.
+- **cf-analyze went on after a definite space mismatch.** When the runs' and the grid's
+  `space_hash` both exist and differ, it now raises before writing any output. A missing hash
+  (legacy metadata) still only warns.
+- **Wide axes could make P negative.** `CategoricalGenerator` validates 0 ≤ eps with eps·n < 1 on
+  every axis, and 0 < alpha, rho ≤ 1. A 100-option axis at eps = 0.02 gave min P = −0.683 after one
+  update. `default_eps(space)` = min(0.02, 0.5 / widest axis) is the default in BsaSearcher and
+  RandomSearcher, so wide axes work with the defaults.
+
+**No existing result is affected:** the shipped spaces' widest axis has 9 options, so eps stays
+0.02 and BSA is bit-identical (tested). The pins and the space hash are unchanged. Traces written
+before this change carry no provenance. That is not flagged when it is the only gap.

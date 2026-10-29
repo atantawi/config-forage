@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from config_forage.bsa.biaser import Biaser
-from config_forage.bsa.generator import CategoricalGenerator, Scheme
+from config_forage.bsa.generator import CategoricalGenerator, Scheme, default_eps
 from config_forage.feasibility import feasible_topologies
 from config_forage.search.base import Trace, batch_search
 from config_forage.space import KnobSpace
@@ -18,12 +18,13 @@ class BsaSearcher:
 
     After each generation, every biaser with an `observe` method gets [(decision, ProbeResult), ...]
     of that generation. `history` holds {gen, runs, entropy, P, ess} per generation (also in
-    trace.extra["history"])."""
+    trace.extra["history"]). eps None means default_eps(space): 0.02, capped at 0.5 / the widest axis."""
 
     def __init__(self, space: KnobSpace, biasers: Sequence[Biaser] = (), batch: int = 16, alpha: float = 0.7,
-                 rho: float = 0.3, eps: float = 0.02, scheme: Scheme = "hard", workers: int | None = None,
+                 rho: float = 0.3, eps: float | None = None, scheme: Scheme = "hard", workers: int | None = None,
                  name: str = "bsa"):
         self.space, self.biasers, self.batch, self.workers, self.name = space, tuple(biasers), batch, workers, name
+        eps = default_eps(space.decision_space) if eps is None else eps
         self.alpha, self.rho, self.eps, self.scheme = alpha, rho, eps, scheme
         self.history: list[dict] = []
 

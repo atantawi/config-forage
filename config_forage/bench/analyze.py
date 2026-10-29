@@ -276,8 +276,10 @@ def _plot_runs_to(by: dict[str, list[Trace]], opt: float, budget: int, path: Pat
 
 
 def check_space_match(runs_dir: Path, grid_path: Path, log=None) -> bool:
-    """Warn (to log) unless the runs manifest and the grid sidecar (<grid>.meta.json) both carry a
-    space_hash and they agree: regret against another space's optimum is meaningless. True if they agree."""
+    """Compare the space_hash of the runs manifest and of the grid sidecar (<grid>.meta.json): regret
+    against another space's optimum is meaningless. Raise ValueError, naming both hashes, when both
+    exist and differ. Warn (to log) and return False when either is missing (legacy metadata, so
+    the analysis goes on); True when they agree."""
     def read(p: Path):
         try:
             return json.loads(p.read_text()).get("space_hash")
@@ -292,10 +294,29 @@ def check_space_match(runs_dir: Path, grid_path: Path, log=None) -> bool:
               f"the grid are of the same space", file=log)
         return False
     if runs_h != grid_h:
-        print(f"cf-analyze: warning: space_hash of the runs ({runs_h}) and the grid ({grid_h}) differ: "
-              f"regret is against another space's optimum", file=log)
-        return False
+        raise ValueError(f"space_hash of the runs ({runs_h}, {runs_dir}) and of the grid ({grid_h}, {grid_path}) "
+                         f"differ: they are of different spaces, so regret would be against another space's "
+                         f"optimum; analyze the runs against their own space's grid")
     return True
+
+
+def provenance_note(traces: Sequence[Trace]) -> str | None:
+    """A one-line caveat when the traces were written by more than one git revision, or by a dirty
+    checkout (extra["provenance"], set by cf-bench); None when they agree and are clean, or carry none."""
+    provs = [t.extra.get("provenance") for t in traces]
+    shas = sorted({str(p.get("git_sha")) for p in provs if p}, key=str)
+    dirty = sum(bool(p and p.get("dirty")) for p in provs)
+    legacy = sum(p is None for p in provs)
+    if len(shas) <= 1 and not dirty:
+        return None
+    parts = []
+    if len(shas) > 1:
+        parts.append(f"the traces span {len(shas)} git revisions ({', '.join(s[:12] for s in shas)})")
+    if dirty:
+        parts.append(f"{dirty} of {len(provs)} traces were written from a dirty checkout")
+    if legacy:
+        parts.append(f"{legacy} carry no provenance")
+    return "; ".join(parts) + ", so they may not all come from the same code"
 
 
 def analyze(runs_dir: Path, out: Path, grid_path: Path | None = None, budgets: Sequence[int] = BUDGETS) -> str:
@@ -303,6 +324,8 @@ def analyze(runs_dir: Path, out: Path, grid_path: Path | None = None, budgets: S
     raw = load_traces(runs_dir)
     if not raw:
         raise ValueError(f"no traces under {runs_dir}")
+    if grid_path is not None:
+        check_space_match(runs_dir, grid_path)  # before any output: a definite mismatch raises
     mpath = Path(runs_dir) / "manifest.json"
     budget = (json.loads(mpath.read_text()).get("budget") if mpath.exists() else None) or \
         max(p.runs for t in raw for p in t.points)
@@ -311,9 +334,12 @@ def analyze(runs_dir: Path, out: Path, grid_path: Path | None = None, budgets: S
     out.mkdir(parents=True, exist_ok=True)
     budgets = [b for b in budgets if b <= budget] or [budget]
     lines = [f"# Benchmark: {len(by)} methods, budget {budget} unique BLIS runs", ""]
+    note = provenance_note(raw)
+    if note:
+        print(f"cf-analyze: warning: {note}", file=sys.stderr)
+        lines += [f"**Provenance:** {note}.", ""]
     refs = [r for r in ("bsa", "tpe") if r in by]
     if grid_path is not None:
-        check_space_match(runs_dir, grid_path)
         opt = optimum(load_grid(grid_path))
         check_not_below(raw, opt)
         tab = regret_table(traces, opt, budgets)

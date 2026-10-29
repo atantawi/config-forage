@@ -309,7 +309,7 @@ def test_grid_sidecar_guards_resume(setup):
     side = tmp / "grid.jsonl.meta.json"
     grid.grid(sp, runner, out, workers=4, log=None)
     meta = json.loads(side.read_text())
-    assert meta == {"space_hash": space_hash(sp), "pins": list(PINS)}
+    assert {k: meta[k] for k in ("space_hash", "pins")} == {"space_hash": space_hash(sp), "pins": list(PINS)}
     assert grid.grid(sp, runner, out, workers=4, log=None)["new"] == 0  # same space resumes
     with pytest.raises(ValueError, match="--out") as e:
         grid.grid(_narrow(sp), runner, out, workers=4, log=None)
@@ -326,16 +326,12 @@ def test_grid_sidecar_guards_resume(setup):
     assert (tmp / "g2.jsonl.meta.json").exists()
 
 
-def test_analyze_warns_on_grid_runs_space_mismatch(setup, capsys):
+def test_analyze_warns_when_a_space_hash_is_missing(setup, capsys):
     sp, runner, tmp = setup
     grid.grid(sp, runner, tmp / "grid.jsonl", workers=4, log=None)
     run.bench(sp, runner, ["random"], [0], 20, tmp / "runs")
     analyze.analyze(tmp / "runs", tmp / "out", tmp / "grid.jsonl")
     assert "space_hash" not in capsys.readouterr().err
-    grid.grid(_narrow(sp), runner, tmp / "g2.jsonl", workers=4, log=None)
-    analyze.analyze(tmp / "runs", tmp / "out", tmp / "g2.jsonl")
-    err = capsys.readouterr().err
-    assert "warning" in err and "space_hash" in err and "differ" in err
     (tmp / "grid.jsonl.meta.json").unlink()
     analyze.analyze(tmp / "runs", tmp / "out", tmp / "grid.jsonl")
     err = capsys.readouterr().err
@@ -383,3 +379,115 @@ def test_heldout_failure_counts_as_zero(setup):
     assert "failures" in md and "mean over successes" in md
     row_a = next(line for line in md.splitlines() if line.startswith("| a |"))
     assert "| 2 |" in row_a and "tie" not in row_a.split("|")[8]
+
+
+# --- review 2, finding 1: pins guard resume; provenance per trace and per call ----------------------
+
+def _fake_git(monkeypatch, sha, dirty=False):
+    import config_forage.bench as bench_pkg
+    monkeypatch.setattr(bench_pkg, "git_state", lambda: {"git_sha": sha, "dirty": dirty})
+
+
+def test_bench_refuses_resume_on_changed_pins(setup, monkeypatch):
+    sp, runner, tmp = setup
+    run.bench(sp, runner, ["random"], [0], 20, tmp / "runs")
+    mp = tmp / "runs" / "manifest.json"
+    m = json.loads(mp.read_text())
+    mp.write_text(json.dumps({**m, "pins": ["inference-sim v0.9.0 deadbeef"]}))
+    with pytest.raises(ValueError, match="pins") as e:
+        run.bench(sp, runner, ["random"], [1], 20, tmp / "runs")
+    assert "v0.9.0" in str(e.value) and "--out" in str(e.value)
+    assert not (tmp / "runs" / "random" / "seed-1.json").exists()
+    del m["pins"]  # a manifest without pins is refused too
+    mp.write_text(json.dumps(m))
+    with pytest.raises(ValueError, match="pins"):
+        run.bench(sp, runner, ["random"], [1], 20, tmp / "runs")
+
+
+def test_bench_records_provenance_per_trace_and_call(setup, monkeypatch):
+    from config_forage.blis.runner import PINS
+    sp, runner, tmp = setup
+    _fake_git(monkeypatch, "aaa")
+    run.bench(sp, runner, ["random"], [0], 20, tmp / "runs")
+    _fake_git(monkeypatch, "bbb", dirty=True)
+    run.bench(sp, runner, ["random", "bsa"], [0, 1], 20, tmp / "runs")  # a resume on another revision
+    t0 = Trace.from_json((tmp / "runs" / "random" / "seed-0.json").read_text())
+    t1 = Trace.from_json((tmp / "runs" / "bsa" / "seed-1.json").read_text())
+    assert t0.extra["provenance"] == {"git_sha": "aaa", "dirty": False, "pins": list(PINS)}
+    assert t1.extra["provenance"] == {"git_sha": "bbb", "dirty": True, "pins": list(PINS)}
+    m = json.loads((tmp / "runs" / "manifest.json").read_text())
+    assert m["git_sha"] == "aaa"  # the original revision is kept, not overwritten
+    c1, c2 = m["calls"]
+    assert (c1["git_sha"], c1["dirty"], c1["arms"], c1["seeds"]) == ("aaa", False, ["random"], [0])
+    assert (c2["git_sha"], c2["dirty"], c2["arms"], c2["seeds"]) == ("bbb", True, ["random", "bsa"], [0, 1])
+    assert all(isinstance(c["time"], str) and c["time"] for c in (c1, c2))
+    assert c2["new_traces"] == 3
+
+
+def test_git_state_reads_this_checkout():
+    from config_forage.bench import git_state
+    g = git_state()
+    assert set(g) == {"git_sha", "dirty"} and isinstance(g["dirty"], bool)
+    assert g["git_sha"] is None or len(g["git_sha"]) == 40
+
+
+def test_analyze_warns_on_mixed_or_dirty_provenance(setup, monkeypatch, capsys):
+    sp, runner, tmp = setup
+    _fake_git(monkeypatch, "aaa")
+    run.bench(sp, runner, ["random"], [0, 1], 20, tmp / "runs")
+    md = analyze.analyze(tmp / "runs", tmp / "out")
+    assert "provenance" not in capsys.readouterr().err and "provenance" not in md.lower()
+    _fake_git(monkeypatch, "bbb")
+    run.bench(sp, runner, ["random"], [2], 20, tmp / "runs")
+    md = analyze.analyze(tmp / "runs", tmp / "out")
+    err = capsys.readouterr().err
+    assert "warning" in err and "aaa" in err and "bbb" in err
+    assert "aaa" in md and "bbb" in md and md == (tmp / "out" / "table.md").read_text()
+    _fake_git(monkeypatch, "aaa", dirty=True)
+    run.bench(sp, runner, ["random"], [0], 20, tmp / "runs-d")
+    md = analyze.analyze(tmp / "runs-d", tmp / "out-d")
+    err = capsys.readouterr().err
+    assert "warning" in err and "dirty" in err and "dirty" in md
+
+
+def test_grid_sidecar_stores_git_sha_as_information(setup, monkeypatch):
+    sp, runner, tmp = setup
+    out, side = tmp / "grid.jsonl", tmp / "grid.jsonl.meta.json"
+    _fake_git(monkeypatch, "aaa")
+    grid.grid(sp, runner, out, workers=4, log=None)
+    assert json.loads(side.read_text())["git_sha"] == "aaa"
+    _fake_git(monkeypatch, "bbb", dirty=True)
+    assert grid.grid(sp, runner, out, workers=4, log=None)["new"] == 0  # another revision still resumes
+    meta = json.loads(side.read_text())
+    assert meta["git_sha"] == "aaa" and [c["git_sha"] for c in meta["calls"]] == ["aaa", "bbb"]
+    assert meta["calls"][1]["dirty"] is True
+
+
+# --- review 2, finding 2: a definite space mismatch aborts the analysis ----------------------------
+
+def test_analyze_refuses_a_definite_space_mismatch(setup):
+    from config_forage.space import space_hash
+    sp, runner, tmp = setup
+    run.bench(sp, runner, ["random"], [0], 20, tmp / "runs")
+    grid.grid(_narrow(sp), runner, tmp / "g2.jsonl", workers=4, log=None)
+    with pytest.raises(ValueError, match="space_hash") as e:
+        analyze.analyze(tmp / "runs", tmp / "out", tmp / "g2.jsonl")
+    assert space_hash(sp) in str(e.value) and space_hash(_narrow(sp)) in str(e.value)
+    assert not (tmp / "out").exists()  # nothing written
+    (tmp / "out").mkdir()
+    with pytest.raises(ValueError, match="space_hash"):
+        analyze.main([str(tmp / "runs"), "--grid", str(tmp / "g2.jsonl"), "--out", str(tmp / "out")])
+    assert list((tmp / "out").iterdir()) == []
+
+
+def test_analyze_continues_with_a_warning_on_legacy_metadata(setup, capsys):
+    sp, runner, tmp = setup
+    run.bench(sp, runner, ["random"], [0], 20, tmp / "runs")
+    grid.grid(_narrow(sp), runner, tmp / "g2.jsonl", workers=4, log=None)
+    m = json.loads((tmp / "runs" / "manifest.json").read_text())
+    del m["space_hash"]  # a legacy manifest: the hashes cannot be compared
+    (tmp / "runs" / "manifest.json").write_text(json.dumps(m))
+    analyze.analyze(tmp / "runs", tmp / "out", tmp / "g2.jsonl")
+    err = capsys.readouterr().err
+    assert "warning" in err and "missing from the runs manifest" in err
+    assert (tmp / "out" / "table.md").exists()

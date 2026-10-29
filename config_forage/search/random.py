@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from config_forage.bsa.generator import CategoricalGenerator
+from config_forage.bsa.generator import CategoricalGenerator, default_eps
 from config_forage.feasibility import FeasibilityBiaser, feasible_topologies
 from config_forage.search.base import Trace, batch_search
 from config_forage.space import KnobSpace
@@ -21,7 +21,8 @@ class RandomSearcher:
     def search(self, objective, budget: int, seed: int) -> Trace:
         if self.feasible_only and not feasible_topologies(self.space):
             raise ValueError(f"no feasible decision in the space for scenario {self.space.scenario}")
-        gen = CategoricalGenerator(self.space.decision_space)
+        ds = self.space.decision_space
+        gen = CategoricalGenerator(ds, eps=default_eps(ds))  # never updated: eps only has to be valid
         applic = self.space.applicability_biaser()
         biasers = (FeasibilityBiaser(self.space),) if self.feasible_only else ()
         biasers = (applic, *biasers) if applic is not None else biasers

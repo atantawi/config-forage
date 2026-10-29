@@ -1,7 +1,8 @@
 """cf-grid: probe every feasible decision once; one JSON line per config, resumable by decision.
 
 A sidecar OUT.meta.json holds the space_hash and the BLIS pins; a resume into a grid whose sidecar
-differs, or that has rows but no sidecar, is refused."""
+differs in either, or that has rows but no sidecar, is refused. The sidecar also records, as
+information only, the git_sha of the first call and {git_sha, dirty, time} of every call."""
 
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import threading
 import time
 from pathlib import Path
 
+import config_forage.bench as _pkg
 from config_forage.bench.analyze import load_grid
 from config_forage.blis.runner import PINS, BlisEnv, CachedRunner, run_batch
 from config_forage.feasibility import enumerate_feasible
@@ -30,8 +32,9 @@ def meta_path(out: Path) -> Path:
 
 
 def _check_meta(space: KnobSpace, out: Path, rows: int) -> dict:
-    """The sidecar this grid must carry; raise if an existing grid's sidecar differs or is missing."""
-    want, mp = {"space_hash": space_hash(space), "pins": list(PINS)}, meta_path(out)
+    """The sidecar to write for this call; raise if an existing grid's sidecar differs in space_hash
+    or pins, or is missing while the grid has rows. git_sha is not checked."""
+    want, mp, have = {"space_hash": space_hash(space), "pins": list(PINS)}, meta_path(out), {}
     if mp.exists():
         have = json.loads(mp.read_text())
         bad = [k for k in want if have.get(k) != want[k]]
@@ -42,7 +45,9 @@ def _check_meta(space: KnobSpace, out: Path, rows: int) -> dict:
     elif rows:
         raise ValueError(f"{out} holds {rows} rows but no sidecar {mp.name}, so its space and pins are "
                          f"unknown (this space_hash is {want['space_hash']}); use a fresh --out")
-    return want
+    git = _pkg.git_state()
+    return {**want, "git_sha": have.get("git_sha") if have else git["git_sha"],  # legacy sidecar: unknown
+            "calls": [*have.get("calls", []), {**git, "time": _pkg.now()}]}
 
 
 def grid(space: KnobSpace, runner, out: Path, workers: int | None = None, log=sys.stderr) -> dict:

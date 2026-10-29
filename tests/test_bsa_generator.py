@@ -328,3 +328,38 @@ def test_weighted_schemes_reject_non_finite_scores():
             with pytest.raises(ValueError):
                 g.update([(0,) * 6] * 3, [0.0, bad, 1.0])
             assert g.snapshot() == before
+
+
+# --- review 2, finding 3: the eps floor must fit every axis ----------------------------------------
+
+def test_eps_too_large_for_a_wide_axis_is_rejected():
+    import pytest
+    wide = DecisionSpace((*SPACE6.axes, Axis("wide", "", tuple(f"o{j}" for j in range(100)))))
+    with pytest.raises(ValueError, match="wide") as e:
+        CategoricalGenerator(wide, eps=0.02)
+    msg = str(e.value)
+    assert "100" in msg and "0.01" in msg  # the axis, its size and the largest eps allowed (< 1/100)
+    for eps in (-0.01, 0.25, 0.3):  # SPACE6's widest axis has 4 options: eps * 4 must be < 1
+        with pytest.raises(ValueError, match="eps"):
+            CategoricalGenerator(SPACE6, eps=eps)
+
+
+def test_eps_zero_is_allowed():
+    g = CategoricalGenerator(SPACE6, eps=0)
+    g.update([(0,) * 6] * 10, [1.0] * 10)
+    assert all(p.min() >= 0 and np.isclose(p.sum(), 1) for p in g.P)
+
+
+def test_alpha_and_rho_are_validated():
+    import pytest
+    for kw in ({"alpha": 0}, {"alpha": 1.5}, {"alpha": -0.1}, {"rho": 0}, {"rho": 1.01}):
+        with pytest.raises(ValueError, match=next(iter(kw))):
+            CategoricalGenerator(SPACE6, **kw)
+    CategoricalGenerator(SPACE6, alpha=1, rho=1)  # the upper ends are allowed
+
+
+def test_default_eps():
+    from config_forage.bsa.generator import default_eps
+    assert default_eps(SPACE6) == 0.02  # 0.5 / 4 > 0.02
+    assert default_eps(_space(9, 2)) == 0.02  # S-large's widest axis
+    assert default_eps(_space(100, 3)) == 0.005 and default_eps(_space(100), eps=0.001) == 0.001
