@@ -1,0 +1,30 @@
+# S-mn (draft, not yet screened): glm-5.3 (MoE, 256 routed experts, 64 KV heads; catalog 0.3.0) fp8 on
+# 32 H100s, chatbot, ITL p99 <= 20 ms, headroom 0.8. Multi-node is REQUIRED: at tp·dp = 8 the kernel
+# reports 88.4 GiB fixed occupancy per rank on a 79.2 GiB H100 (whatever max_model_len, gmu or KV
+# dtype), so every instance spans 2 or 4 nodes (width 16 or 32) over ib-400g. BLIS v0.14.0, engine 0.29.0.
+# Knob lists follow S-mid v3 until this scenario's own screen (docs/experiments/) pins its flat axes.
+scenario:
+  model: glm-5.3
+  hardware: h100
+  workload: chatbot
+  gpu_budget: 32
+  engine_version: "0.29.0"
+  slo: {itl_p99_ms: 20}
+  headroom: 0.8
+  seed: 0
+  num_requests_base: 1280
+  model_entry: {arch: MoE, heads_kv: 64, min_footprint: 16}  # fits from tp·dp = 16 (probed: tp16, tp8·dp2, tp4·dp4)
+knobs:
+  - {name: tp, values: [1, 2, 4, 8, 16, 32], default: 16}
+  - {name: dp, values: [1, 2, 4, 8, 16, 32], default: 1}
+  - {name: enable_expert_parallel, values: [false, true], default: true}
+  - {name: data_parallel_load_balancing, values: [internal, external], default: internal, requires: [dp, [2, 4, 8, 16, 32]]}
+  - {name: quantization, values: [fp8]}
+  - {name: cache_dtype, values: [auto, fp8], default: fp8}
+  - {name: gpu_memory_utilization, values: [0.85, 0.9, 0.95], default: 0.9}
+  - {name: max_num_batched_tokens, values: [2048, 8192], default: 8192}
+  - {name: block_size, values: [64]}
+  - {name: max_num_seqs, values: [32, 64, 128, 256, 512], default: 256}
+  - {name: endpoint_picker_config, values: [load-only, inflight-load, prefix-affinity], default: load-only}
+  - {name: kv_cache_utilization_scorer_weight, values: [0, 1, 2, 4], default: 1}
+  - {name: active_request_scorer_weight, values: [0, 1, 2, 4], default: 2, requires: [endpoint_picker_config, [inflight-load]]}
