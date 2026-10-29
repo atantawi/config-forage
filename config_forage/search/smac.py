@@ -17,6 +17,8 @@ from config_forage.feasibility import TOPOLOGY, enumerate_feasible, is_feasible
 from config_forage.search.base import Recorder, Trace
 from config_forage.space import KnobSpace
 
+logging.getLogger("smac").setLevel(logging.ERROR)
+
 MAX_STALL = 80  # consecutive evaluated trials adding no unique run end the search
 FAILED = 0.0  # a failed probe costs zero throughput, the worst
 
@@ -51,7 +53,6 @@ class SmacSearcher:
     def search(self, objective, budget: int, seed: int) -> Trace:
         if next(enumerate_feasible(self.space), None) is None:
             raise ValueError(f"no feasible decision in the space for scenario {self.space.scenario}")
-        logging.getLogger("smac").setLevel(logging.ERROR)
         with tempfile.TemporaryDirectory() as tmp:
             sc = Scenario(to_configspace(self.space), deterministic=True, n_trials=1_000_000, seed=seed,
                           output_directory=Path(tmp) / "smac")

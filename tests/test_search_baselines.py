@@ -1,10 +1,15 @@
 from pathlib import Path
 
+import pytest
+
 from config_forage.feasibility import is_feasible
 from config_forage.search.smac import SmacSearcher, to_configspace
 from config_forage.search.tpe import TpeSearcher
 from config_forage.space import load_space
 from helpers import SyntheticObjective, synthetic_space
+
+# pytest resets warning filters per test, over tpe.py's module-level filter; a mark outranks -W error.
+pytestmark = pytest.mark.filterwarnings("ignore::optuna.exceptions.ExperimentalWarning")
 
 TINY = Path(__file__).parent / "data" / "tiny-space.yaml"
 

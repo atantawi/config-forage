@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import threading
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Protocol
@@ -70,8 +69,9 @@ class Recorder:
         self.scored: dict[Decision, ProbeResult] = {}
         self.best: tuple[float, Decision] | None = None
 
-    def record(self, d: Decision, r: ProbeResult) -> ProbeResult:
-        runs = self.objective.runs_used  # callers serialize record(), so runs is non-decreasing
+    def record(self, d: Decision, r: ProbeResult, runs: int | None = None) -> ProbeResult:
+        """runs defaults to objective.runs_used now; callers serialize record(), so it is non-decreasing."""
+        runs = self.objective.runs_used if runs is None else runs
         self.scored[d] = r
         if r.score is not None and (self.best is None or r.score < self.best[0]):
             self.best = (r.score, d)
@@ -87,16 +87,15 @@ def batch_search(space: KnobSpace, objective, budget: int, seed: int, gen: Categ
     """Sample `batch` decisions from gen under biasers, evaluate them in parallel, call `after`;
     repeat until objective.runs_used >= budget (the last batch may overshoot, and the trace shows it).
 
+    Each batch is evaluated in parallel, then recorded in decision order: a point's runs is the
+    distinct result keys (ProbeResult.keys) of this search so far, capped at objective.runs_used,
+    so a seeded trace does not depend on thread timing.
+
     Also stops after MAX_STALL consecutive batches that add no unique run: duplicates are free, so
     an exhausted space or a collapsed P would otherwise loop forever."""
     rng = np.random.default_rng(seed)
     rec = Recorder(space, objective)
-    stall, lock = 0, threading.Lock()
-
-    def evaluate(d: Decision) -> ProbeResult:
-        r = objective(d)
-        with lock:  # runs_used is read right after this evaluation, before any other is recorded
-            return rec.record(d, r)
+    stall, base, seen = 0, objective.runs_used, set()
 
     while objective.runs_used < budget and stall < MAX_STALL:
         before = objective.runs_used
@@ -107,7 +106,11 @@ def batch_search(space: KnobSpace, objective, budget: int, seed: int, gen: Categ
                 if d not in rec.scored and d not in ds:
                     break
             ds.append(d)
-        rs = run_batch(evaluate, ds, workers)
+        rs = run_batch(objective, ds, workers)
+        after_runs = objective.runs_used
+        for d, r in zip(ds, rs):
+            seen |= r.keys
+            rec.record(d, r, min(base + len(seen), after_runs))
         after(ds, rs, rec)
-        stall = stall + 1 if objective.runs_used == before else 0
+        stall = stall + 1 if after_runs == before else 0
     return rec.points

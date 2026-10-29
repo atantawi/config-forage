@@ -129,3 +129,18 @@ def test_synthetic_optimum_unique_and_coordinatewise_trap():
     trap = {"a": 0, "b": 0, "c": 3, "d": 2}
     for k in "ab":
         assert all(synthetic_score({**trap, k: v}) > 0 for v in range(1, 6))
+
+
+def test_seeded_trace_independent_of_thread_timing():
+    import random
+    import time
+
+    sp = synthetic_space()
+
+    class Jittery(SyntheticObjective):
+        def __call__(self, d):
+            time.sleep(random.uniform(0, 0.002))
+            return super().__call__(d)
+
+    a, b = (BsaSearcher(sp, workers=4).search(Jittery(sp), 80, 3) for _ in range(2))
+    assert a.points == b.points and a.extra["history"] == b.extra["history"]

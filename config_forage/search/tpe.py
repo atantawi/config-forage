@@ -10,6 +10,9 @@ from config_forage.feasibility import enumerate_feasible, is_feasible
 from config_forage.search.base import Recorder, Trace
 from config_forage.space import KnobSpace
 
+warnings.filterwarnings("ignore", category=optuna.exceptions.ExperimentalWarning)
+optuna.logging.set_verbosity(optuna.logging.ERROR)
+
 MAX_INFEASIBLE = 1000  # consecutive infeasible suggestions end the search
 MAX_STALL = 80  # consecutive evaluated trials adding no unique run end the search
 FAILED = 0.0  # a failed probe scores as zero throughput, the worst
@@ -26,12 +29,9 @@ class TpeSearcher:
     def search(self, objective, budget: int, seed: int) -> Trace:
         if next(enumerate_feasible(self.space), None) is None:
             raise ValueError(f"no feasible decision in the space for scenario {self.space.scenario}")
-        optuna.logging.set_verbosity(optuna.logging.ERROR)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", optuna.exceptions.ExperimentalWarning)
-            sampler = optuna.samplers.TPESampler(multivariate=self.multivariate, group=self.multivariate,
-                                                 n_startup_trials=self.n_startup, seed=seed)
-            return self._loop(optuna.create_study(direction="minimize", sampler=sampler), objective, budget, seed)
+        sampler = optuna.samplers.TPESampler(multivariate=self.multivariate, group=self.multivariate,
+                                             n_startup_trials=self.n_startup, seed=seed)
+        return self._loop(optuna.create_study(direction="minimize", sampler=sampler), objective, budget, seed)
 
     def _loop(self, study, objective, budget, seed) -> Trace:
         rec, labels = Recorder(self.space, objective), [tuple(map(str, k.values)) for k in self.space.knobs]
