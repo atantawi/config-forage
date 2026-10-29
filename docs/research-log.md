@@ -212,3 +212,35 @@ Open, in priority order:
    - `cf-analyze --heldout` doesn't check `--space` against the runs' hash.
    - The timeout flag per config.
    - BsaSearcher validates eps at construction.
+
+## 2026-10-29 — Upgrade to BLIS v0.14.0 (engine 0.29.0), multi-node, S-mid v3
+
+User decisions: upgrade first, to v0.14.0 with `engine_version` 0.29.0. Multi-node shapes are
+whatever BLIS supports. Router knobs are an EPP family plus scorer weights. RFC #21 (blis-config-search
+discussion) waits until the case for BSA over the incumbent is firm.
+
+**Code.**
+- **Routing.** v0.12.0 removed BLIS's routing and admission flags. `config_forage/router.py` turns the
+  flat knobs (`endpoint_picker_config`, `<scorer>_weight`) into an EndpointPickerConfig, which run_blis
+  writes as the scenario's `router:` block. The cache key covers the translated config.
+- **DP load balancing.** `data_parallel_load_balancing` is a pool parallel field.
+- **Feasibility.** A width above 8 is allowed when it fills whole nodes and divides the budget. Pins
+  and the setup script now point at the v0.14.0 stack.
+
+**Findings** (details: `docs/experiments/s-mid-v3-screen.md`):
+- **The topology ranking flipped.** On identical configs, v0.14.0's DP lockstep (#1946) raises the
+  dp>1 tail ITL (tp2·dp4 p99 at c = 32: 19.3 → 47.1 ms) and lowers tp8's (106.5 → 35.5 ms). The best
+  single-axis base is now 2 × tp8·dp1 + EP at ~64 tok/s/GPU. v2's tp2·dp4 optimum gave 132.5.
+- **Routing went from the main signal to a minor one.** In v2, routing_policy spread was 31.6%
+  median. Now the EPP family is worth 0–17%, and scorer weights ≈ 0 (kv weight 0 is bad at tp8:
+  13.6%).
+- **`max_num_seqs` now matters** (9–47% at dp>1 and multi-node). mnbt, block_size, scheduler and
+  preemption are flat.
+- **Multi-node doesn't win here.** Best is 56.2 (tp16). But it has the strongest knob interactions:
+  at tp8·dp2, EP 58%, max_num_seqs 47%, family 16% and DP LB 13%.
+
+**Spaces.**
+- **S-mid v3:** 3,840 feasible configs, 18 topologies (8 single-node, 10 width-16).
+- **S-large v3:** 1.4 × 10⁹.
+- **v2 results** (`results/s-mid3`) are archived as the v0.10.0 baseline and are not comparable.
+- **Grid:** S-mid v3 ground truth is being computed (`results/s-mid-v3/grid.jsonl`).
