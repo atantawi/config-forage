@@ -27,6 +27,17 @@ The next scenarios should make more engine knobs matter:
 Before choosing, screen each candidate at 1280 requests. Check that more than the topology carries
 signal, then grid the pinned space.
 
+## LLM-designed sweeps as a search arm (decided with the user, 2026-10-30)
+
+Add upstream's skill-driven experiment design ([blis-config-search PR #22](https://github.com/inference-sim/blis-config-search/pull/22)) to the benchmark portfolio, next to BSA, the incumbent and the baselines. **Test it on the next scenario** (a TTFT-SLO or multidoc/agentx one), not on S-mid v3 or S-mn. Their findings are public (RFC #21) or about to be, so they would contaminate the test.
+
+- **Arm.** The skill writes a spec for the scenario. We expand the spec to its configs, keep those that match our GPU budget, and score each with our probe. Scoring with the spec's own concurrency list is a second variant. The trace follows the spec's order; the budget is unique BLIS runs. LLM tokens and wall time go in a separate cost column.
+- **Clean room.** Run the skill as a fresh agent in a worktree with no `results/`, `docs/`, research log or grid data, and no access to this repo's findings. Note that the skill's own reference notes contain measured findings, which counts as legitimate domain knowledge.
+- **Variation.** The skill is nondeterministic, so run it 5–10 times and treat each run as a seed.
+- **Budget.** A spec has no notion of a run budget. Either ask the skill to fit one, or compare at the size it chooses. Record which was done.
+- **Pins.** Pin a specific PR #22 commit. PR #22 targets BLIS v0.12.0 and we run v0.14.0; the knob names match RFC #21, so the translation is mechanical.
+- **Hybrid.** Use an LLM-designed spec as BSA's prior: the LLM proposes, BSA refines. Compare it against both on their own.
+
 ## Other open items
 
 - **S-large benchmark:** no grid; compare the methods on best-found against budget.
