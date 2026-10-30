@@ -114,20 +114,28 @@ equal unique runs, never at equal configs.
 
 ## Results
 
-First benchmark: S-mid v2 (glm-5.3-flash, 16× H100, chatbot, 4,608 configs; full grid as ground
-truth). The optimum is 132.5 tok/s per GPU at 2 × tp2·dp4 + EP. Results at a budget of 1,000 unique
-BLIS runs, over 10 seeds:
+**S-mid v3** (BLIS v0.14.0; glm-5.3-flash, 16× H100, chatbot, 3,840 configs, full grid as ground
+truth):
 
-- **BSA with the feasibility biaser:** within 0.5% of the optimum on 10/10 seeds.
-- **SMAC:** 8/10. **TPE:** 6/10.
-- **Upstream one-knob-at-a-time heuristic:** reaches 1% fastest (235 runs), then stalls at 0.84%.
-- **Significance:** none of these differences is significant at n = 10.
+- **Optimum: 67.1 tok/s per GPU** at 2 × tp8 + EP with the `inflight-load` router.
+- **The top is flat:** 105 configs are within 1%, all of them tp8 + EP.
+- **The default config is within 0.11% of the optimum.**
+- **The next-best topology is 16% lower:** tp8 without EP, or tp16 + EP across two nodes.
 
-This is a sanity check on a space small enough to enumerate. The large-space claim (S-large,
-4.6 × 10⁷ configs) is not yet tested.
+So this space cannot separate the search methods. A 5-seed sanity benchmark at budget 300 only
+confirms that the harness works: every method gets within 1%. Coord-ascent, starting at the default,
+takes 9 runs, BSA + feasibility 41, the incumbent 105.
 
-See `docs/research-log.md` (dated entries) and `docs/experiments/` for the ground truth, sensitivity
-analyses and full benchmark tables.
+**S-mid v2** (BLIS v0.10.0, 80 requests per point; archived) is not comparable. DP lockstep in
+v0.11.0 flipped its topology ranking, and its short runs were 2–10% off. On it, BSA + feasibility was
+within 0.5% on 10/10 seeds, SMAC 8/10, and TPE 6/10. None of these differences was significant.
+
+The case for BSA has not been made yet. It needs scenarios where the default topology is not good and
+the knobs interact (next: glm-5.3 on 32 H100, where every instance must span nodes) and the large
+space, S-large.
+
+See `docs/research-log.md` (dated entries) and `docs/experiments/` for the ground truth, the
+screening and the benchmark tables.
 
 ## Caveats
 

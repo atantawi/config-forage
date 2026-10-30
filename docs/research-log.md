@@ -254,13 +254,37 @@ About 27k unique BLIS runs, ~5 h of wall time at 9 workers, with one pause and r
 - **The space is nearly flat at the top.** 105 configs are within 1% of the optimum, all at
   tp8·dp1 + EP. 93 of them are within 0.5%. A config sampled at random is within 1% with
   probability 2.7%.
-- **The default config scores 67.02, 0.11% from the optimum.** So the incumbent, which probes the
-  default topology first, is effectively done after its first probe.
+- **The default config scores 67.02, 0.11% from the optimum.** Coord-ascent starts from the default,
+  so it is done after one probe. The incumbent probes every topology first (phase 1), so it is not.
 - **Topology carries the signal.** The next best topologies are tp8 without EP (−16.3%), tp16 + EP
   across 2 nodes (−16.7%), tp4·dp2 + EP (−19.4%) and tp8·dp2 + EP (−21.2%). Inside tp8 + EP, the
   router family, max_num_seqs and scorer weights move the score by under 1%.
 
-**Consequence:** S-mid v3 cannot separate the search methods. Every method that tries the default
-topology finds a config within 0.11% of the optimum. This is a sanity scenario, not evidence for BSA.
+**Consequence:** S-mid v3 cannot separate the search methods. Any method that starts from, or
+samples, tp8 + EP finds a config within 1% of the optimum. This is a sanity scenario, not evidence for BSA.
 The case for BSA has to come from a scenario where the default topology is not near-optimal and
 the knobs interact: the multi-node-required S-mn (glm-5.3, 32 H100) is next.
+
+### Sanity benchmark (S-mid v3, budget 300, seeds 0–4)
+
+`results/s-mid-v3/runs`, `results/s-mid-v3/analysis`. This check confirms the upgraded harness runs
+end to end: all 8 arms ran, every BLIS run came from the grid's cache, and cf-analyze and the
+held-out rescoring both completed. It is not a method comparison.
+
+| method | runs to 1% (median) | seeds within 0.5% at B = 200 |
+|---|---|---|
+| coord-ascent | 9 | 5/5 (starts at the default) |
+| bsa-feas | 41 | 4/5 |
+| random | 41 | 3/5 |
+| tpe | 64 | 5/5 |
+| smac | 87 | 5/5 |
+| incumbent | 105 | 5/5 |
+| bsa (no biaser) | 164 | 3/5 |
+
+- **bsa-diag and bsa-feas give identical traces again:** no diagnostic rule fires (no preemption,
+  no TTFT SLO).
+- **Held-out rescoring:** 75 of the 80 top-10 entries, rescored on seeds 1–3, are within 0.5% of the
+  best (−67.05). The others are lower-ranked entries of the incumbent and random. Every method's
+  rank-1 config is a tie, so no search winner is a seed-0 artifact.
+- **SMAC warnings:** it emits numpy "mean of empty slice" warnings from its local-search timing. They
+  are harmless.
