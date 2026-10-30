@@ -244,3 +244,23 @@ discussion) waits until the case for BSA over the incumbent is firm.
 - **S-large v3:** 1.4 × 10⁹.
 - **v2 results** (`results/s-mid3`) are archived as the v0.10.0 baseline and are not comparable.
 - **Grid:** S-mid v3 ground truth is being computed (`results/s-mid-v3/grid.jsonl`).
+
+## 2026-10-30 — S-mid v3 ground truth (BLIS v0.14.0, 1280 requests per point)
+
+`results/s-mid-v3/grid.jsonl`: all 3,840 configs score (no failures, none censored at c = 4096).
+About 27k unique BLIS runs, ~5 h of wall time at 9 workers, with one pause and resume.
+
+- **Optimum: 67.09 tok/s per GPU** at 2 × tp8·dp1 + EP, `inflight-load` router, max_num_seqs 256.
+- **The space is nearly flat at the top.** 105 configs are within 1% of the optimum, all at
+  tp8·dp1 + EP. 93 of them are within 0.5%. A config sampled at random is within 1% with
+  probability 2.7%.
+- **The default config scores 67.02, 0.11% from the optimum.** So the incumbent, which probes the
+  default topology first, is effectively done after its first probe.
+- **Topology carries the signal.** The next best topologies are tp8 without EP (−16.3%), tp16 + EP
+  across 2 nodes (−16.7%), tp4·dp2 + EP (−19.4%) and tp8·dp2 + EP (−21.2%). Inside tp8 + EP, the
+  router family, max_num_seqs and scorer weights move the score by under 1%.
+
+**Consequence:** S-mid v3 cannot separate the search methods. Every method that tries the default
+topology finds a config within 0.11% of the optimum. This is a sanity scenario, not evidence for BSA.
+The case for BSA has to come from a scenario where the default topology is not near-optimal and
+the knobs interact: the multi-node-required S-mn (glm-5.3, 32 H100) is next.
