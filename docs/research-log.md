@@ -201,7 +201,7 @@ before this change carry no provenance. That is not flagged when it is the only 
 **Spec amended** to match the implemented rules: an infeasible sample costs 1 run, C* is searched
 upward without a ceiling, and a run that sheds requests counts as a failure.
 
-Open, in priority order:
+Open, in priority order (superseded: the current list is `docs/next-steps.md`):
 1. **Multi-node instances.** Should the one-node rule be relaxed? This is the user's decision. If
    yes, allow widths that are a multiple of 8 up to the budget, then regrid.
 2. **S-large benchmark.** No grid; compare methods on best-found against budget. This is the actual
