@@ -324,8 +324,25 @@ added in the PR #3 review, show the prefix-cache weight flat too (0%).
 - **Held-out seeds 1–3:** 9 configs tie exactly at the seed-0 optimum (25.94); they are
   inflight-load with different non-zero kv and active weights. The methods' rank-1 picks differ among
   them (all 9 are kv weight × active weight in {1, 2, 4}), and all of them score the same held-out
-  mean, −25.92. 61 of the 80 top-10 entries tie
-  within 0.5%.
+  mean, −25.92. 61 of the 80 top-10 entries tie within 0.5%.
 - **"Dirty" provenance:** cf-analyze flags all 40 traces as dirty. The checkout's only uncommitted
   changes were the pinned S-mn space file and the screening space, both committed afterwards in
   2c1530d. The space hash in the grid sidecar and in the bench manifest matches that commit.
+
+## 2026-10-30 — PR #3 merged; S-mn findings posted to RFC #21
+
+- **Merged:** PR #3 (7086c2b) added S-mn, its 10-base screen, ground truth and sanity benchmark, and
+  `docs/next-steps.md`.
+- **The PR #3 reviews found:**
+  - `prefix_cache_scorer_weight` was never screened (none of the first 7 bases used prefix-affinity).
+    3 more bases showed it flat.
+  - Four overstated statements, corrected.
+  - The screens' `sensitivity.jsonl` was really a stdout transcript. It now holds only records;
+    `scripts/sensitivity.py --jsonl` writes them.
+- **Posted:** the second set of findings, for both scenarios, to
+  [blis-config-search discussion #21](https://github.com/inference-sim/blis-config-search/discussions/21#discussioncomment-19299745).
+  It covers the plateau and the cliffs, flat engine knobs, the conditions under which the router and
+  DP load balancing matter, and the C* probe and its cost. BSA is not mentioned.
+- **Open next:** feedback on blis-config-search PR #22 (the experiment skill), then a scenario that can
+  separate the methods (TTFT SLO or multidoc/agentx), run in a clean room so that it also serves as
+  the first test of LLM-designed sweeps. See `docs/next-steps.md`.

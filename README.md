@@ -52,7 +52,14 @@ It ends by printing four exports; set them in your shell:
 A space is a YAML file (`spaces/`): the scenario (model, hardware, workload, GPU budget, SLO,
 headroom, requests per point) and the knobs with their values. Adding a knob is a pure YAML addition.
 `spaces/screen/` holds wide screening spaces for `scripts/sensitivity.py`. Their one-axis spreads
-decide which knobs a benchmark space pins.
+decide which knobs a benchmark space pins:
+
+```sh
+# 0. Screen: vary one knob at a time around a base; repeat at several bases (a gated knob is
+#    varied only at a base where it applies). --jsonl keeps the records; stdout adds the tables.
+uv run python scripts/sensitivity.py spaces/screen/glm53-h100-chatbot-32-screen.yaml --cache cache \
+    --base '{"tp":8,"dp":2}' --jsonl results/screen-mn/sensitivity.jsonl
+```
 
 ```sh
 SPACE=spaces/glm53flash-h100-chatbot-16.yaml    # S-mid v3; S-mn: spaces/glm53-h100-chatbot-32.yaml
