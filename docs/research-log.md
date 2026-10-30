@@ -289,3 +289,18 @@ held-out rescoring both completed. It is not a method comparison.
   rank-1 config is a tie, so no search winner is a seed-0 artifact.
 - **SMAC warnings:** it emits numpy "mean of empty slice" warnings from its local-search timing. They
   are harmless.
+
+## 2026-10-30 — S-mn: glm-5.3 on 32 H100 (multi-node required), screen and ground truth
+
+Details: `docs/experiments/s-mn-screen.md`. Space: `spaces/glm53-h100-chatbot-32.yaml`, 960 configs
+after pinning 7 axes that were flat (< 1%) at all 7 screened bases.
+
+- **Optimum: 25.94 tok/s per GPU** at 2 × tp16 + EP with inflight-load. 21 configs are within 1%,
+  all of them that topology. Every other topology is at least 24% lower. 8 of the 22 topologies (tp
+  ≤ 2) fail at c = 1.
+- **Engine knobs: none matter.** `max_num_seqs`, which mattered in S-mid v3 at dp > 1, is flat
+  here. EP (29–68%) and topology carry the signal. Router family and DP LB matter only at dp > 1.
+- **Same structure as S-mid v3, with steeper cliffs.** Like S-mid, it cannot separate search
+  methods. The default (chosen as the narrowest fit) is 0.51% from the optimum.
+- **Harness cost:** a c = 1 run of the dp16/dp32 shapes takes 100–250 s at 1280 requests, only to
+  fail. A short pre-check at c = 1 would save most of the grid's first hour (next-steps).

@@ -42,6 +42,10 @@ Add upstream's skill-driven experiment design ([blis-config-search PR #22](https
 
 - **S-large benchmark:** no grid; compare the methods on best-found against budget.
 - **Second set for RFC #21:** post S-mn's findings in the same thread. Show the user the draft first.
+- **Cheap c = 1 pre-check:** a config whose ITL at c = 1 already breaks the SLO fails after one run,
+  but at 1280 requests that run takes 100–250 s on dp16/dp32 shapes. A short run at c = 1 (e.g. 80
+  requests) could reject it first. It must not change any scored result: a config that fails short
+  but might pass long still gets the full run.
 - **Small follow-ups:**
   - `cf-analyze --heldout` doesn't check `--space` against the runs' hash.
   - A per-config timeout flag.
