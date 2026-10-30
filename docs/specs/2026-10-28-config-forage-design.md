@@ -1,5 +1,16 @@
 # config-forage: BSA for serving-configuration search — design
 
+> **Amended 2026-10-30.** The pins (inference-sim v0.10.0), the one-instance-per-node rule and the
+> BLIS-native routing/admission knobs below describe the original design. Current state (PR #2):
+> - **Pins:** BLIS v0.14.0.
+> - **Multi-node:** instances that fill whole nodes are allowed.
+> - **Router:** llm-d router knobs (`config_forage/router.py`).
+> - **Requests:** 1,280 per point.
+>
+> See the README and `docs/research-log.md`. The objective, budget unit and method design are
+> unchanged.
+
+
 Date: 2026-10-28. Status: approved; amended 2026-10-29 to match the implemented rules (§4, §7,
 marked "Amended").
 

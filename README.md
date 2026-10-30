@@ -50,22 +50,24 @@ It ends by printing four exports; set them in your shell:
 ## Workflow
 
 A space is a YAML file (`spaces/`): the scenario (model, hardware, workload, GPU budget, SLO,
-headroom) and the knobs with their values. Adding a knob is a pure YAML addition.
+headroom, requests per point) and the knobs with their values. Adding a knob is a pure YAML addition.
+`spaces/screen/` holds wide screening spaces for `scripts/sensitivity.py`. Their one-axis spreads
+decide which knobs a benchmark space pins.
 
 ```sh
-SPACE=spaces/glm53flash-h100-chatbot-16.yaml
+SPACE=spaces/glm53flash-h100-chatbot-16.yaml    # S-mid v3; S-mn: spaces/glm53-h100-chatbot-32.yaml
 
 # 1. Ground truth: probe every feasible config once (resumable).
-uv run cf-grid $SPACE --cache cache --out results/s-mid/grid.jsonl --workers 9
+uv run cf-grid $SPACE --cache cache --out results/s-mid-v3/grid.jsonl --workers 9
 
 # 2. Benchmark: each method x seed to a budget of unique BLIS runs (resumable, shared cache).
-uv run cf-bench $SPACE --cache cache --out results/s-mid/runs --budget 1000 --seeds 0-9 --jobs 2 \
+uv run cf-bench $SPACE --cache cache --out results/s-mid-v3/runs --budget 1000 --seeds 0-9 --jobs 2 \
     --methods bsa,bsa-feas,bsa-diag,random,tpe,smac,incumbent,coord-ascent
 
 # 3. Analysis: regret vs budget, runs to within 1%, Wilcoxon tests (table.md, regret.png, runs_to_1pct.png).
-uv run cf-analyze results/s-mid/runs --grid results/s-mid/grid.jsonl --out results/s-mid/analysis
+uv run cf-analyze results/s-mid-v3/runs --grid results/s-mid-v3/grid.jsonl --out results/s-mid-v3/analysis
 #    optionally rescore each method's top 10 configs on held-out workload seeds 1-3 (needs BLIS):
-uv run cf-analyze results/s-mid/runs --grid results/s-mid/grid.jsonl --out results/s-mid/analysis \
+uv run cf-analyze results/s-mid-v3/runs --grid results/s-mid-v3/grid.jsonl --out results/s-mid-v3/analysis \
     --heldout 10 --space $SPACE --cache cache
 ```
 
@@ -114,28 +116,43 @@ equal unique runs, never at equal configs.
 
 ## Results
 
-**S-mid v3** (BLIS v0.14.0; glm-5.3-flash, 16× H100, chatbot, 3,840 configs, full grid as ground
-truth):
+Two scenarios with full grids as ground truth (BLIS v0.14.0, 1,280 requests per point). Both use the
+chatbot workload with an ITL p99 ≤ 20 ms SLO:
 
-- **Optimum: 67.1 tok/s per GPU** at 2 × tp8 + EP with the `inflight-load` router.
-- **The top is flat:** 105 configs are within 1%, all of them tp8 + EP.
-- **The default config is within 0.11% of the optimum.**
-- **The next-best topology is 16% lower:** tp8 without EP, or tp16 + EP across two nodes.
+| | S-mid v3 | S-mn |
+|---|---|---|
+| scenario | glm-5.3-flash, 16× H100 | glm-5.3, 32× H100 (multi-node required) |
+| configs | 3,840 | 960 |
+| optimum (tok/s per GPU) | 67.1 at 2 × tp8 + EP | 25.9 at 2 × tp16 + EP |
+| configs within 1% | 105, all in that topology | 21, all in that topology |
+| gap to next topology | 16% | 24% |
+| default's gap to optimum | 0.11% | 0.51% |
+| engine knobs that matter | `max_num_seqs`, only at dp > 1 | none |
 
-So this space cannot separate the search methods. A 5-seed sanity benchmark at budget 300 only
-confirms that the harness works: every method gets within 1%. Coord-ascent, starting at the default,
-takes 9 runs, BSA + feasibility 41, the incumbent 105.
+In both, one topology (the narrowest tp + EP that fits) carries almost all the signal. Router family
+and DP load balancing matter only at dp > 1. A 5-seed sanity benchmark at budget 300 shows that every
+method reaches within 1% of the optimum, so neither space can separate the search methods. Runs to
+reach 1% (S-mid v3 / S-mn):
 
-**S-mid v2** (BLIS v0.10.0, 80 requests per point; archived) is not comparable. DP lockstep in
-v0.11.0 flipped its topology ranking, and its short runs were 2–10% off. On it, BSA + feasibility was
-within 0.5% on 10/10 seeds, SMAC 8/10, and TPE 6/10. None of these differences was significant.
+- coord-ascent, which starts at the default: 9 / 9
+- BSA + feasibility: 41 / 30
+- incumbent: 105 / 79
 
-The case for BSA has not been made yet. It needs scenarios where the default topology is not good and
-the knobs interact (next: glm-5.3 on 32 H100, where every instance must span nodes) and the large
-space, S-large.
+These findings about the shape of the space are posted to
+[blis-config-search discussion #21](https://github.com/inference-sim/blis-config-search/discussions/21).
 
-See `docs/research-log.md` (dated entries) and `docs/experiments/` for the ground truth, the
-screening and the benchmark tables.
+**S-mid v2** (BLIS v0.10.0, 80 requests per point; archived) is not comparable. DP lockstep in v0.11.0
+flipped its topology ranking, and its short runs were 2–10% off.
+
+The case for BSA has not been made yet. It needs scenarios where several knobs matter and interact:
+a TTFT SLO, the multidoc or agentx workloads, kimi-k2.5. It also needs the large space (S-large) and
+a comparison with LLM-designed sweeps. See `docs/next-steps.md`.
+
+Details:
+- `docs/research-log.md`: dated entries.
+- `docs/experiments/s-mid-v3-screen.md` and `docs/experiments/s-mn-screen.md`: screens, ground truth
+  and benchmark tables.
+- `docs/experiments/s-mid-grid.md`: the archived v0.10.0 study.
 
 ## Caveats
 
@@ -143,11 +160,12 @@ screening and the benchmark tables.
 - Multi-node instances (tp·dp a multiple of 8 above one node, over an `ib-400g` fabric) are in the
   space. BLIS prices them, but the accuracy dashboard does not score multi-node points against
   hardware, so they are less validated than single-node ones.
-- The S-mid ground truth is one scenario (glm-5.3-flash, 16 H100, chatbot). Its signal is mostly
-  topology × routing, the upstream incumbent heuristic gets within 1% there, and the diagnostic
-  biaser has no active rule in it (see the research log). Results do not generalize beyond it
-  without further scenarios.
+- Both ground truths are chatbot with an ITL-only SLO. Their flatness, the near-optimal default and
+  the dead diagnostic biaser (no rule fires) are specific to that setting. In S-mn the default
+  topology was chosen before the screen, so its closeness to the optimum is not independent evidence.
 - The search uses one workload seed. `cf-analyze --heldout` checks the winners on three others.
+- **Probe cost:** a config that fails at c = 1 is charged one run, but on dp16/dp32 shapes that run
+  takes 100–250 s at 1,280 requests.
 
 ## License
 
