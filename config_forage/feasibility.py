@@ -10,11 +10,12 @@ from itertools import product
 
 import numpy as np
 
+from config_forage.blis import run_blis
 from config_forage.bsa.biaser import ApplicabilityBiaser
 from config_forage.bsa.space import Decision
 from config_forage.space import KnobSpace, Scenario
 
-GPUS_PER_NODE = 8
+GPUS_PER_NODE = run_blis.GPUS_PER_NODE  # one source: run_blis refuses a straddle with the same rule
 TOPOLOGY = ("tp", "dp", "enable_expert_parallel")
 
 
@@ -68,7 +69,7 @@ class FeasibilityBiaser:
 def feasible_topologies(space: KnobSpace) -> list[dict]:
     """The distinct feasible assignments of the space's topology knobs, as {name: value}, in the
     order enumerate_feasible first meets them (lexicographic in the space's knob order). Never walks
-    the other knobs: at most 4·4·2 checks. Empty iff the space has no feasible decision."""
+    the other knobs: at most |tp|·|dp|·|EP| checks (50 in the shipped spaces). Empty iff the space has no feasible decision."""
     topo = [k for k in space.knobs if k.name in TOPOLOGY]
     out = [dict(zip((k.name for k in topo), vs)) for vs in product(*(k.values for k in topo))]
     return [t for t in out if is_feasible(t, space.scenario)]

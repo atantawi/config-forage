@@ -1,5 +1,7 @@
 # Screening space for BLIS v0.14.0 (not a benchmark space): every candidate S-mid v3 knob with wide
 # value lists, for scripts/sensitivity.py at several bases. Results: docs/experiments/s-mid-v3-screen.md.
+# The recorded screen ran at num_requests_base 80 (as below, to reproduce it); the "<1%" pins were then
+# rechecked at 1280 requests (same doc, "Pins rechecked at 1280 requests").
 scenario:
   model: glm-5.3-flash
   hardware: h100

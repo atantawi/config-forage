@@ -1,8 +1,9 @@
+#!/usr/bin/env python3
 # Vendored from inference-sim/blis-config-search (Apache-2.0) at 1a6dc6fa89b7c3569b409b9b5c92143267dd80ad,
 # then modified for BLIS v0.14.0 (see NOTICE): routing goes through the embedded llm-d router, which
-# the scenario's `router:` block configures with an EndpointPickerConfig (epp_config); the BLIS-native
-# routing/admission flags were removed in v0.12.0. DP load balancing is a pool parallel field.
-#!/usr/bin/env python3
+# the scenario's `router:` block configures with an EndpointPickerConfig (epp_config, or the flat router
+# knobs of config_forage.router); the BLIS-native routing/admission flags were removed in v0.12.0. DP
+# load balancing is a pool parallel field.
 # run_blis.py -- the ONE place config-search invokes BLIS and records a single run.
 #
 #   python3 -I scripts/run_blis.py ...        (importable: sweep_pool.py reuses run_one())
@@ -21,6 +22,8 @@
 # 0.3.0, blis-registry v0.2.0 (holds the 6 coefficient sets below, incl cost-model-memory).
 import argparse, hashlib, json, os, subprocess, sys, tempfile, time
 
+from config_forage import router as router_knobs
+
 COEFFICIENTS = ["cost-model-primitives", "cost-model-collectives", "cost-model-host-overheads",
                 "cost-model-attention", "cost-model-recurrent", "cost-model-memory"]
 
@@ -34,7 +37,7 @@ SCENARIO_ENGINE = ("quantization", "cache_dtype", "block_size", "max_num_batched
 CLI_FLAGS = {"num_instances": "--num-instances", "concurrency": "--concurrency",
              "scheduler": "--scheduler", "preemption_policy": "--preemption-policy"}
 PARALLEL_DEFAULTS = {"tp": 1, "pp": 1, "dp": 1, "enable_expert_parallel": False}
-GPUS_PER_NODE = 8   # single-node H100; a per-instance footprint beyond this spans nodes (needs a fabric)
+GPUS_PER_NODE = 8   # per node (H100/H200 HGX); a footprint beyond this spans whole nodes over a fabric
 # Cross-node cost resolves from the fabric (a catalog networks/ entry), required once nodes > 1.
 DEFAULT_FABRIC = "ib-400g"   # InfiniBand NDR 400 Gb/s; the standard H100 multi-node interconnect
 # NON-PRECISION engine defaults only. quantization/cache_dtype are intentionally NOT defaulted: an
@@ -70,7 +73,12 @@ class ConfigError(ValueError):
 
 def classify_config(config):
     """Split a candidate into (parallel, engine, cli, router); raise ConfigError on unknown/unsupported
-    keys. router is {} or {"epp_config": <EndpointPickerConfig dict>}."""
+    keys. Router knobs (config_forage.router) are translated to epp_config first. router is {} or
+    {"epp_config": <EndpointPickerConfig dict>}."""
+    try:
+        config = router_knobs.to_blis(config)
+    except ValueError as e:
+        raise ConfigError(str(e)) from None
     parallel, engine, cli, router = dict(PARALLEL_DEFAULTS), dict(ENGINE_DEFAULTS), {}, {}
     for k, v in config.items():
         if k in SCENARIO_PARALLEL:
@@ -103,6 +111,12 @@ def classify_config(config):
             f"per-instance footprint tp*pp*dp={fp} spans {fp / GPUS_PER_NODE:.2g} nodes: a "
             f"multi-node instance must fill whole {GPUS_PER_NODE}-GPU nodes (use a footprint that "
             f"is a multiple of {GPUS_PER_NODE}, or scale out with num_instances instead)")
+    lb = parallel.get("data_parallel_load_balancing")
+    if lb is not None and parallel["dp"] == 1:
+        # without DP there is nothing to balance; stating it would split the cache for the same run
+        raise ConfigError("data_parallel_load_balancing needs dp > 1")
+    if lb == "hybrid" and fp > GPUS_PER_NODE:
+        raise ConfigError("data_parallel_load_balancing hybrid: BLIS refuses a replica across nodes")
     return parallel, engine, cli, router
 
 
@@ -339,7 +353,7 @@ def _record_shell(config, phase):
 
 
 def run_one(blis, catalog, registry, scenarios_dir, model, hardware, engine_version,
-            workload, num_requests, seed, horizon, config, phase="probe", timeout=120, defaults=None):
+            workload, num_requests, seed, horizon, config, phase="probe", timeout=900, defaults=None):
     """Run one kernel-priced BLIS config and return a record dict. No runs.jsonl I/O (caller writes)."""
     rec = _record_shell(config, phase)
     try:
@@ -400,7 +414,7 @@ def add_common_args(p):
     p.add_argument("--horizon", type=int)
     p.add_argument("--defaults", help="path to defaults.yaml (default: next to the blis binary)")
     p.add_argument("--phase", default="probe")
-    p.add_argument("--timeout", type=int, default=120)
+    p.add_argument("--timeout", type=int, default=900)
 
 
 def require_env(args):

@@ -92,9 +92,13 @@ class CachedRunner:
 
     def run(self, config: dict, concurrency: int, seed: int | None = None) -> dict:
         """Router knobs are translated first (router.to_blis), so the cache key covers the
-        EndpointPickerConfig BLIS actually runs, not just the knob values."""
+        EndpointPickerConfig BLIS actually runs, not just the knob values. A config they cannot
+        translate is passed on as is: run_blis refuses it and records an error row."""
         seed = self.scenario.seed if seed is None else seed
-        config = router.to_blis(config)
+        try:
+            config = router.to_blis(config)
+        except ValueError:
+            pass
         key = cache_key(config, concurrency, seed, self.scenario)
         with self._lock:
             klock = self._key_locks.setdefault(key, threading.Lock())

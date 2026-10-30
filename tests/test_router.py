@@ -74,3 +74,26 @@ def test_run_blis_writes_router_block(tmp_path):
 def test_removed_blis_routing_flags_refused(key):
     with pytest.raises(run_blis.ConfigError, match="removed in BLIS v0.12.0"):
         run_blis.classify_config({key: "x"})
+
+
+def test_untranslatable_router_knobs_are_an_error_row_not_a_crash(tmp_path):
+    rec = run_blis.run_one("blis", None, None, str(tmp_path), "m", "h100", "0.29.0", "chatbot", 80, 0, None,
+                           {"tp": 8, "num_instances": 1, "concurrency": 1,
+                            "endpoint_picker_config": "load-only", "active_request_scorer_weight": 2})
+    assert rec["returncode"] is None and "no scorer" in rec["error"]
+    r = CachedRunner(None, SC, tmp_path / "c", run_fn=lambda c, *_: {"error": "refused", "returncode": None,
+                                                                     "metrics": {}, "deployment": {}})
+    assert r.run({"queue_scorer_weight": 2}, 8)["error"] == "refused"  # passed on, not raised
+
+
+def test_run_blis_accepts_flat_router_knobs():
+    *_, rt = run_blis.classify_config({"tp": 8, "endpoint_picker_config": "inflight-load"})
+    assert rt["epp_config"]["kind"] == "EndpointPickerConfig"
+
+
+@pytest.mark.parametrize("cfg, msg", [({"tp": 8, "data_parallel_load_balancing": "external"}, "needs dp > 1"),
+                                      ({"tp": 8, "dp": 2, "data_parallel_load_balancing": "hybrid"},
+                                       "across nodes")])
+def test_dp_load_balancing_checks(cfg, msg):
+    with pytest.raises(run_blis.ConfigError, match=msg):
+        run_blis.classify_config(cfg)

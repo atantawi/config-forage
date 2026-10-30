@@ -41,12 +41,28 @@ def test_s_mid_size():
     assert sp.default_config()["num_instances"] == 2
 
 
+def _with(sp: KnobSpace, **over) -> dict:
+    """Each knob at its default, with overrides; gated knobs only where they apply."""
+    c: dict = {}
+    for k in sp.knobs:
+        if k.requires is None or c.get(k.requires[0]) in k.requires[1]:
+            c[k.name] = over.get(k.name, k.default)
+    return c
+
+
 def test_s_large_size_and_superset():
     mid, large = load_space(MID), load_space(LARGE)
     n = count_feasible(large)
     assert n >= 10**5, n
-    assert n == 1_415_577_600
+    assert n == 707_788_800
     for k in mid.knobs:  # S-mid is a sub-space of S-large, with the same defaults
         kl = large.knobs[large.names.index(k.name)]
         assert set(k.values) <= set(kl.values) and kl.default == k.default
+    # ... and a knob only S-large has defaults to what S-mid runs without it: S-large's default config
+    # translates to the same BLIS config as S-mid's (router weights included)
+    from config_forage import router
+    for fam in ("load-only", "inflight-load", "prefix-affinity"):
+        cm = mid.config(mid.decision(_with(mid, endpoint_picker_config=fam)))
+        cl = large.config(large.decision(_with(large, endpoint_picker_config=fam)))
+        assert router.to_blis(cm)["epp_config"] == router.to_blis(cl)["epp_config"], fam
     assert mid.scenario == large.scenario

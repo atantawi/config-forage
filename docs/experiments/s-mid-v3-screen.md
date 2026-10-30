@@ -69,7 +69,10 @@ block 64. "inflight" = `endpoint_picker_config: inflight-load`, "ext" = external
 - `gpu_memory_utilization`, `max_num_batched_tokens`, `block_size`, `scheduler`,
   `preemption_policy`, `queue_scorer_weight`, `prefix_cache_scorer_weight`: 0%.
 
-S-mid v3 pins all of these. They stay unpinned in S-large.
+S-mid v3 pins all of these: the engine and scheduler knobs to one value each, the queue and
+prefix-cache weights by having no knob (each family keeps its own weights). They stay unpinned in
+S-large, where `prefix_cache_scorer_weight` applies to the prefix-affinity family only and defaults
+to that family's weight of 3, so S-mid's configs are S-large's default configs.
 
 ## Multi-node
 
@@ -126,3 +129,30 @@ Full probe (score at ⌊0.8·C*⌋) for every S-mid v3 topology plus 6 knob vari
 **At 5120 the default 120 s BLIS timeout cut off dp ≥ 8 configs.** A timeout is not cached, but it
 fails that probe point. So `num_requests_base` is now 1280 in both spaces, and the timeout is 900 s.
 That costs about 5× the wall time per run. The budget unit (unique runs) is unchanged.
+
+## Pins rechecked at 1280 requests
+
+The one-axis screen above ran at 80 requests, where scores carry 2–10% error. That is more than the
+1% pinning threshold. So the screen was repeated at 1280 requests on three bases:
+
+- 2 × tp8 + EP with inflight-load (the S-mid v3 optimum);
+- 2 × tp4·dp2 + EP;
+- 1 × tp8·dp2 + EP, external LB, inflight-load (2 nodes).
+
+The command is the screening space with `num_requests_base: 1280` and `scripts/sensitivity.py`.
+
+Largest one-axis spread of each pinned axis over the three bases:
+
+| axis | spread |
+|---|---|
+| cache_dtype | 0.6% (tp4·dp2) |
+| max_num_batched_tokens | 0.4% |
+| gpu_memory_utilization, block_size, scheduler, preemption_policy | 0.0% |
+| queue_scorer_weight, prefix_cache_scorer_weight | 0.0% |
+
+Every pin holds. At 1280 the spreads of the unpinned axes are:
+
+- `max_num_seqs`: 0.4% at tp8, 0.4% at tp4·dp2, 43% at tp8·dp2.
+- Router family: 0.1% at tp8, 12% at tp4·dp2, 3% at tp8·dp2.
+- EP: 16–54%.
+- DP LB: 2–4%.

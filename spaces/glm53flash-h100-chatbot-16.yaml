@@ -3,8 +3,8 @@
 # v3: routing through the embedded llm-d router (endpoint_picker_config family + scorer weights; the
 # BLIS-native routing/admission flags are gone), multi-node instances (width 16 = 2 whole nodes), DP
 # load balancing. Axes under 1% at every probed base are pinned (docs/experiments/s-mid-v3-screen.md):
-# cache_dtype, gpu_memory_utilization, max_num_batched_tokens, block_size, scheduler, preemption_policy,
-# queue and prefix-cache scorer weights. v2 (BLIS v0.10.0) = git show c3473d1:spaces/glm53flash-h100-chatbot-16.yaml
+# cache_dtype, gpu_memory_utilization, max_num_batched_tokens, block_size, scheduler, preemption_policy.
+# The queue and prefix-cache scorer weights are not knobs: each family keeps its own (router.FAMILIES). v2 (BLIS v0.10.0) = git show c3473d1:spaces/glm53flash-h100-chatbot-16.yaml
 scenario:
   model: glm-5.3-flash
   hardware: h100
