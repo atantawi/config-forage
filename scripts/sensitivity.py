@@ -29,7 +29,14 @@ def main() -> None:
     sp = load_space(a.space)
     runner = CachedRunner(BlisEnv.from_env(), sp.scenario, a.cache)
     base = {k: v for k, v in sp.default_config().items() if k != "num_instances"}
-    base.update(json.loads(a.base))
+    over = json.loads(a.base)
+    unknown = sorted(set(over) - set(sp.names))
+    if unknown:
+        raise SystemExit(f"--base: not knobs of this space: {unknown}")
+    base = _normalize(sp, {**base, **over})  # an override may switch a gated knob on or off
+    dropped = sorted(k for k in over if k not in base)
+    if dropped:
+        raise SystemExit(f"--base: {dropped} do not apply (their `requires` is unmet at this base)")
     jobs = [("(base)", None)]
     gated_off = [k.name for k in sp.knobs if k.name not in base]
     for k in sp.knobs:

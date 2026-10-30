@@ -134,14 +134,14 @@ def counting_runner(tmp_path, sc=SC):
 def test_objective_infeasible_charged_one_run_without_blis(tmp_path):
     from config_forage.blis.runner import cache_key
     sc = replace(SC, gpu_budget=16, model_entry={"arch": "MoE"})
-    sp = KnobSpace(sc, (Knob("tp", (8, 4)), Knob("dp", (1, 4))))
+    sp = KnobSpace(sc, (Knob("tp", (8, 4)), Knob("dp", (1, 3))))
     r, calls = counting_runner(tmp_path, sc)
     obj = Objective(sp, r)
-    p = obj((1, 1))  # tp4·dp4 = width 16 > 8 GPUs per node
+    p = obj((1, 1))  # tp4·dp3 = width 12: does not divide 16 (and straddles a node)
     assert p.score is None and p.c_star is None and p.runs == 1 and calls == []
     assert p.diagnostics["binding"] == "infeasible"
     (key,) = p.keys
-    assert key == "infeasible:" + cache_key({"tp": 4, "dp": 4}, 1, sc.seed, sc)
+    assert key == "infeasible:" + cache_key({"tp": 4, "dp": 3}, 1, sc.seed, sc)
     assert obj.runs_used == 1
     obj((1, 1))
     assert obj.runs_used == 1 and obj.evaluations == 2  # the same infeasible config costs 1 once

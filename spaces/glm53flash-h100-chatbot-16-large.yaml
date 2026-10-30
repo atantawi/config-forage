@@ -1,6 +1,6 @@
-# S-large: S-mid (glm-5.3-flash, 16 H100, chatbot, ITL p99 <= 20 ms) plus block_size, max_model_len,
-# cudagraph_mode, scheduler, preemption_policy, admission_policy, routing_scorers, with finer lists.
-# Every value below was accepted by the pinned BLIS in a real probe (docs/experiments/s-mid-grid.md).
+# S-large v3 (BLIS v0.14.0, engine 0.29.0): S-mid v3 plus every engine knob unpinned, cudagraph_mode,
+# max_model_len, scheduler, preemption_policy and all four router scorer weights, with finer lists.
+# Every value below was accepted by BLIS v0.14.0 in a real run (docs/experiments/s-mid-v3-screen.md).
 scenario:
   model: glm-5.3-flash
   hardware: h100
@@ -10,26 +10,26 @@ scenario:
   slo: {itl_p99_ms: 20}
   headroom: 0.8
   seed: 0
-  num_requests_base: 80
-  model_entry: {arch: MoE, heads_kv: 64, min_footprint: 8}  # weights fit only at tp·dp = 8 (BLIS memory model)
+  num_requests_base: 1280  # scores converge here (docs/experiments/s-mid-v3-screen.md); 80 was 5-10% off
+  model_entry: {arch: MoE, heads_kv: 64, min_footprint: 8}  # weights fit only from tp·dp = 8 (BLIS memory model)
 knobs:
-  - {name: tp, values: [1, 2, 4, 8], default: 8}
-  - {name: dp, values: [1, 2, 4, 8], default: 1}
+  - {name: tp, values: [1, 2, 4, 8, 16], default: 8}
+  - {name: dp, values: [1, 2, 4, 8, 16], default: 1}
   - {name: enable_expert_parallel, values: [false, true], default: true}
+  - {name: data_parallel_load_balancing, values: [internal, external], default: internal, requires: [dp, [2, 4, 8, 16]]}
   - {name: quantization, values: [fp8]}
   - {name: cache_dtype, values: [auto, fp8], default: fp8}
-  - {name: block_size, values: [16, 32, 64, 128], default: 64}  # 64 = runner default for this DSA model (S-mid runs at 64)
+  - {name: gpu_memory_utilization, values: [0.7, 0.8, 0.85, 0.9, 0.95], default: 0.9}
+  - {name: max_num_batched_tokens, values: [1024, 2048, 4096, 8192, 16384, 32768], default: 8192}
+  - {name: block_size, values: [16, 32, 64, 128], default: 64}  # 64 = runner default for this DSA model
   - {name: max_model_len, values: [8192, 16384, 32768], default: 32768}
   - {name: cudagraph_mode, values: [NONE, PIECEWISE, FULL, FULL_DECODE_ONLY, FULL_AND_PIECEWISE], default: PIECEWISE}
   - {name: max_num_seqs, values: [16, 32, 64, 128, 256, 512], default: 256}
-  - {name: max_num_batched_tokens, values: [1024, 2048, 4096, 8192, 16384, 32768], default: 8192}
-  - {name: gpu_memory_utilization, values: [0.7, 0.8, 0.85, 0.9, 0.95], default: 0.9}
   - {name: scheduler, values: [fcfs, priority-fcfs, sjf, reverse-priority], default: fcfs}
   - {name: preemption_policy, values: [fcfs, priority], default: fcfs}
-  - {name: admission_policy, values: [always-admit, tier-shed, gaie-legacy], default: always-admit}  # token-bucket dropped: sheds offered requests, which the objective does not penalize
-  - {name: routing_policy, values: [round-robin, least-loaded, weighted], default: round-robin}
-  - name: routing_scorers
-    values: ["precise-prefix-cache:2,queue-depth:1,kv-utilization:1", "queue-depth:1", "kv-utilization:1",
-             "load-balance:1", "active-requests:1", "running-requests:1", "load-aware:1",
-             "queue-depth:2,kv-utilization:2,load-balance:1", "prefix-affinity:1,queue-depth:1"]
-    requires: [routing_policy, [weighted]]
+  - {name: endpoint_picker_config, values: [load-only, inflight-load, prefix-affinity], default: load-only}
+  - {name: queue_scorer_weight, values: [0, 1, 2, 4], default: 1}
+  - {name: kv_cache_utilization_scorer_weight, values: [0, 1, 2, 4], default: 1}
+  # gated to prefix-affinity only, so its default equals that family's own weight (3); inflight-load keeps its 1
+  - {name: prefix_cache_scorer_weight, values: [0, 1, 3], default: 3, requires: [endpoint_picker_config, [prefix-affinity]]}
+  - {name: active_request_scorer_weight, values: [0, 1, 2, 4], default: 2, requires: [endpoint_picker_config, [inflight-load]]}

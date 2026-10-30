@@ -190,14 +190,14 @@ def test_random_on_a_100_option_axis():
 
 
 def test_default_eps_is_unchanged_on_s_mid_and_s_large():
-    """Both shipped spaces keep eps = 0.02 (max axis 4 and 9, and 0.5 / 9 > 0.02), so BSA is
+    """Both shipped spaces keep eps = 0.02 (max axis 5 and 6, and 0.5 / 6 > 0.02), so BSA is
     bit-identical to the explicit eps = 0.02 there."""
     from pathlib import Path
 
     from config_forage.bsa.generator import default_eps
     from config_forage.space import load_space
     spaces = Path(__file__).resolve().parent.parent / "spaces"
-    for f, widest in (("glm53flash-h100-chatbot-16.yaml", 4), ("glm53flash-h100-chatbot-16-large.yaml", 9)):
+    for f, widest in (("glm53flash-h100-chatbot-16.yaml", 5), ("glm53flash-h100-chatbot-16-large.yaml", 6)):
         sp = load_space(spaces / f)
         assert max(sp.decision_space.sizes) == widest and default_eps(sp.decision_space) == 0.02
     sp = synthetic_space()

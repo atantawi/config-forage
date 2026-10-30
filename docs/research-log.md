@@ -212,3 +212,80 @@ Open, in priority order:
    - `cf-analyze --heldout` doesn't check `--space` against the runs' hash.
    - The timeout flag per config.
    - BsaSearcher validates eps at construction.
+
+## 2026-10-29 — Upgrade to BLIS v0.14.0 (engine 0.29.0), multi-node, S-mid v3
+
+User decisions: upgrade first, to v0.14.0 with `engine_version` 0.29.0. Multi-node shapes are
+whatever BLIS supports. Router knobs are an EPP family plus scorer weights. RFC #21 (blis-config-search
+discussion) waits until the case for BSA over the incumbent is firm.
+
+**Code.**
+- **Routing.** v0.12.0 removed BLIS's routing and admission flags. `config_forage/router.py` turns the
+  flat knobs (`endpoint_picker_config`, `<scorer>_weight`) into an EndpointPickerConfig, which run_blis
+  writes as the scenario's `router:` block. The cache key covers the translated config.
+- **DP load balancing.** `data_parallel_load_balancing` is a pool parallel field.
+- **Feasibility.** A width above 8 is allowed when it fills whole nodes and divides the budget. Pins
+  and the setup script now point at the v0.14.0 stack.
+
+**Findings** (details: `docs/experiments/s-mid-v3-screen.md`):
+- **The topology ranking flipped.** On identical configs, v0.14.0's DP lockstep (#1946) raises the
+  dp>1 tail ITL (tp2·dp4 p99 at c = 32: 19.3 → 47.1 ms) and lowers tp8's (106.5 → 35.5 ms). The best
+  single-axis base is now 2 × tp8·dp1 + EP at ~64 tok/s/GPU. v2's tp2·dp4 optimum gave 132.5.
+- **Routing went from the main signal to a minor one.** In v2, routing_policy spread was 31.6%
+  median. Now the EPP family is worth 0–17%, and scorer weights ≈ 0 (kv weight 0 is bad at tp8:
+  13.6%).
+- **`max_num_seqs` now matters** (9–47% at dp>1 and multi-node). mnbt, block_size, scheduler and
+  preemption are flat.
+- **Multi-node doesn't win here.** Best is 56.2 (tp16). But it has the strongest knob interactions:
+  at tp8·dp2, EP 58%, max_num_seqs 47%, family 16% and DP LB 13%.
+
+**Spaces.**
+- **S-mid v3:** 3,840 feasible configs, 18 topologies (8 single-node, 10 width-16).
+- **S-large v3:** 7.1 × 10⁸ (707,788,800; first 1.4 × 10⁹, halved when the review fixes gated
+  `prefix_cache_scorer_weight` to prefix-affinity only).
+- **v2 results** (`results/s-mid3`) are archived as the v0.10.0 baseline and are not comparable.
+- **Grid:** S-mid v3 ground truth is being computed (`results/s-mid-v3/grid.jsonl`).
+
+## 2026-10-30 — S-mid v3 ground truth (BLIS v0.14.0, 1280 requests per point)
+
+`results/s-mid-v3/grid.jsonl`: all 3,840 configs score (no failures, none censored at c = 4096).
+About 27k unique BLIS runs, ~5 h of wall time at 9 workers, with one pause and resume.
+
+- **Optimum: 67.09 tok/s per GPU** at 2 × tp8·dp1 + EP, `inflight-load` router, max_num_seqs 256.
+- **The space is nearly flat at the top.** 105 configs are within 1% of the optimum, all at
+  tp8·dp1 + EP. 93 of them are within 0.5%. A config sampled at random is within 1% with
+  probability 2.7%.
+- **The default config scores 67.02, 0.11% from the optimum.** Coord-ascent starts from the default,
+  so it is done after one probe. The incumbent probes every topology first (phase 1), so it is not.
+- **Topology carries the signal.** The next best topologies are tp8 without EP (−16.3%), tp16 + EP
+  across 2 nodes (−16.7%), tp4·dp2 + EP (−19.4%) and tp8·dp2 + EP (−21.2%). Inside tp8 + EP, the
+  router family, max_num_seqs and scorer weights move the score by under 1%.
+
+**Consequence:** S-mid v3 cannot separate the search methods. Any method that starts from, or
+samples, tp8 + EP finds a config within 1% of the optimum. This is a sanity scenario, not evidence for BSA.
+The case for BSA has to come from a scenario where the default topology is not near-optimal and
+the knobs interact: the multi-node-required S-mn (glm-5.3, 32 H100) is next.
+
+### Sanity benchmark (S-mid v3, budget 300, seeds 0–4)
+
+`results/s-mid-v3/runs`, `results/s-mid-v3/analysis`. This check confirms the upgraded harness runs
+end to end: all 8 arms ran, every BLIS run came from the grid's cache, and cf-analyze and the
+held-out rescoring both completed. It is not a method comparison.
+
+| method | runs to 1% (median) | seeds within 0.5% at B = 200 |
+|---|---|---|
+| coord-ascent | 9 | 5/5 (starts at the default) |
+| bsa-feas | 41 | 4/5 |
+| random | 41 | 3/5 |
+| tpe | 64 | 5/5 |
+| smac | 87 | 5/5 |
+| incumbent | 105 | 5/5 |
+| bsa (no biaser) | 164 | 3/5 |
+
+- **bsa-diag and bsa-feas give identical traces again:** no diagnostic rule fires (no preemption,
+  no TTFT SLO).
+- **Held-out rescoring:** 75 of the 80 top-10 entries, rescored on seeds 1–3, are within 0.5% of the
+  best (−67.05). The others are lower-ranked entries of the incumbent and random. Every method's
+  rank-1 config is a tie, so no search winner is a seed-0 artifact.
+- **SMAC warnings:** it emits numpy "mean of empty slice" warnings from its local-search timing. They
+  are harmless.

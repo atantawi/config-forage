@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Clone and build the pinned BLIS stack (upstream blis-config-search SETUP.md §1–2) into DEST.
+# Clone and build the pinned BLIS stack (upstream blis-config-search SETUP.md §1–2) into DEST. Go >= 1.27.2.
 # Idempotent: existing clones are kept (not re-cloned) but their commits are still verified;
 # the binary is built if missing or older than the checkout's Go sources. Prints the four BLIS_* exports on success.
 #
@@ -7,10 +7,10 @@
 set -euo pipefail
 
 DEST=${1:?usage: setup_blis.sh DEST}
-SIM_TAG=v0.10.0
-SIM_SHA=0d092d4ef64f605046de1181adf8e2b6ee564725   # release v0.10.0 (kernel v0.1.0 in go.mod)
-CATALOG_TAG=0.2.1
-REGISTRY_TAG=v0.1.1                                 # MUST be v0.1.1: it carries cost-model-memory
+SIM_TAG=v0.14.0
+SIM_SHA=f2ba6bb1c189ed5a56933cfa3d0927eae3836ee9   # release v0.14.0 (kernel v0.4.0, blis-vllm v0.32.0 in go.mod)
+CATALOG_TAG=0.3.0                                   # the release's documented compatible catalog
+REGISTRY_TAG=v0.2.0                                 # carries cost-model-memory (v0.1.1 or later)
 GH=https://github.com/inference-sim
 
 mkdir -p "$DEST"
@@ -36,7 +36,7 @@ check_tag() {  # check_tag REPO TAG -- HEAD must be the tagged commit
 }
 
 clone inference-sim "$SIM_TAG"
-# The v0.10.0 tag is not immutable upstream: verify it still resolves to the pinned commit.
+# The release tag is not immutable upstream: verify it still resolves to the pinned commit.
 HEAD_SHA=$(git -C "$DEST/inference-sim" rev-parse HEAD)
 if [[ "$HEAD_SHA" != "$SIM_SHA" ]]; then
   echo "inference-sim HEAD is $HEAD_SHA, expected $SIM_SHA ($SIM_TAG) -- aborting" >&2
