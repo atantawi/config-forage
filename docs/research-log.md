@@ -304,3 +304,24 @@ after pinning 7 axes that were flat (< 1%) at all 7 screened bases.
   methods. The default (chosen as the narrowest fit) is 0.51% from the optimum.
 - **Harness cost:** a c = 1 run of the dp16/dp32 shapes takes 100–250 s at 1280 requests, only to
   fail. A short pre-check at c = 1 would save most of the grid's first hour (next-steps).
+
+### S-mn sanity benchmark (budget 300, seeds 0–4)
+
+`results/s-mn/runs`, `results/s-mn/analysis`. Every BLIS run came from the grid's cache.
+
+| method | runs to 1% (median) | seeds within 0.5% at B = 200 |
+|---|---|---|
+| coord-ascent | 9 | 5/5 (starts at the default) |
+| bsa-feas | 30 | 3/5 |
+| random | 30 | 2/5 |
+| smac | 47 | 4/5 |
+| incumbent | 79 | 5/5 |
+| bsa (no biaser) | 93 | 4/5 |
+| tpe | 165 | 2/5 |
+
+- **bsa-diag = bsa-feas again:** no rule fires.
+- **Held-out seeds 1–3:** every method's rank-1 config is the same config, the optimum, and its
+  held-out mean is −25.92. 61 of the 80 top-10 entries tie within 0.5%.
+- **"Dirty" provenance:** cf-analyze flags all 40 traces as dirty. The checkout's only uncommitted
+  changes were the pinned S-mn space file and the screening space, both committed afterwards in
+  2c1530d. The space hash in the grid sidecar and in the bench manifest matches that commit.
