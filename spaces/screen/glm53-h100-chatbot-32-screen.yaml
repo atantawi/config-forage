@@ -1,0 +1,32 @@
+# Screening space for S-mn (glm-5.3 fp8, 32 H100, chatbot; BLIS v0.14.0, engine 0.29.0); not a benchmark
+# space. Every candidate knob with wide value lists, for scripts/sensitivity.py at several bases, at the
+# converged 1280 requests per point. Results: docs/experiments/s-mn-screen.md.
+scenario:
+  model: glm-5.3
+  hardware: h100
+  workload: chatbot
+  gpu_budget: 32
+  engine_version: "0.29.0"
+  slo: {itl_p99_ms: 20}
+  headroom: 0.8
+  seed: 0
+  num_requests_base: 1280
+  model_entry: {arch: MoE, heads_kv: 64, min_footprint: 16}
+knobs:
+  - {name: tp, values: [1, 2, 4, 8, 16, 32], default: 16}
+  - {name: dp, values: [1, 2, 4, 8, 16, 32], default: 1}
+  - {name: enable_expert_parallel, values: [false, true], default: true}
+  - {name: data_parallel_load_balancing, values: [internal, external], default: internal, requires: [dp, [2, 4, 8, 16, 32]]}
+  - {name: quantization, values: [fp8]}
+  - {name: cache_dtype, values: [auto, fp8], default: fp8}
+  - {name: gpu_memory_utilization, values: [0.8, 0.9, 0.95], default: 0.9}
+  - {name: max_num_batched_tokens, values: [1024, 2048, 4096, 8192, 16384], default: 8192}
+  - {name: block_size, values: [64, 128], default: 64}  # DSA model: multiples of 64 only
+  - {name: max_num_seqs, values: [32, 64, 128, 256, 512], default: 256}
+  - {name: scheduler, values: [fcfs, priority-fcfs, sjf], default: fcfs}
+  - {name: preemption_policy, values: [fcfs, priority], default: fcfs}
+  - {name: endpoint_picker_config, values: [load-only, inflight-load, prefix-affinity], default: load-only}
+  - {name: queue_scorer_weight, values: [0, 1, 2, 4], default: 1}
+  - {name: kv_cache_utilization_scorer_weight, values: [0, 1, 2, 4], default: 1}
+  - {name: prefix_cache_scorer_weight, values: [0, 1, 3], default: 3, requires: [endpoint_picker_config, [prefix-affinity]]}
+  - {name: active_request_scorer_weight, values: [0, 1, 2, 4], default: 2, requires: [endpoint_picker_config, [inflight-load]]}
