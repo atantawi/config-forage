@@ -6,7 +6,9 @@ as in catalog 0.2.1.
 
 Screening space: `spaces/screen/glm53flash-h100-chatbot-16-v014-screen.yaml`. Command:
 `scripts/sensitivity.py SPACE --cache cache --base '{...}'`. Raw output:
-`results/screen-v014/sensitivity.jsonl`. Score = tok/s per GPU at c_use = ⌊0.8·C*⌋, ITL p99 ≤ 20 ms.
+`results/screen-v014/sensitivity.jsonl` (the records, valid JSONL) and
+`results/screen-v014/sensitivity-transcript.txt` (the full stdout, tables included).
+Score = tok/s per GPU at c_use = ⌊0.8·C*⌋, ITL p99 ≤ 20 ms.
 Spread = (max − min)/max over one axis's values at a fixed base.
 
 ## What changed from v0.10.0 on the same configs

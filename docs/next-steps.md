@@ -8,8 +8,9 @@ Update it when an item is done or re-prioritized.
 S-mid v3 (glm-5.3-flash, 16 H100) and S-mn (glm-5.3, 32 H100) are both **chatbot with an ITL-only
 SLO**. In both, one topology dominates, and almost every engine knob is flat (under 1%). The
 default topology is at or near the optimum, and one-knob-at-a-time search finds it at once. Neither
-scenario can show a BSA advantage. Both keep their value as findings about the search space (posted
-to blis-config-search discussion #21).
+scenario can show a BSA advantage. Both keep their value as findings about the search space: S-mid
+v3's are posted to blis-config-search discussion #21, and S-mn's are to follow (see "Other open
+items").
 
 The next scenarios should make more engine knobs matter:
 

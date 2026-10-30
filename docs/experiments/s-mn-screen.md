@@ -13,7 +13,9 @@ instance spans 2 nodes (width 16) or 4 nodes (width 32) over ib-400g. That gives
 ## Screen (one axis at a time, 10 bases)
 
 Screening space: `spaces/screen/glm53-h100-chatbot-32-screen.yaml`. Raw output:
-`results/screen-mn/sensitivity.jsonl`, `results/screen-mn/summary.txt`. About 2,060 BLIS runs.
+`results/screen-mn/sensitivity.jsonl` (the records: one `base` and its `variant`s per base, valid
+JSONL), `results/screen-mn/summary.txt` (the per-axis tables) and
+`results/screen-mn/sensitivity-transcript.txt` (the full stdout). About 2,060 BLIS runs.
 
 The first 7 bases never use the `prefix-affinity` family, so `prefix_cache_scorer_weight`, which is
 gated to that family, was never varied. Three more bases (marked †) were added in review to screen it.
