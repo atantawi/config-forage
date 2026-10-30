@@ -241,7 +241,8 @@ discussion) waits until the case for BSA over the incumbent is firm.
 
 **Spaces.**
 - **S-mid v3:** 3,840 feasible configs, 18 topologies (8 single-node, 10 width-16).
-- **S-large v3:** 1.4 × 10⁹.
+- **S-large v3:** 7.1 × 10⁸ (707,788,800; first 1.4 × 10⁹, halved when the review fixes gated
+  `prefix_cache_scorer_weight` to prefix-affinity only).
 - **v2 results** (`results/s-mid3`) are archived as the v0.10.0 baseline and are not comparable.
 - **Grid:** S-mid v3 ground truth is being computed (`results/s-mid-v3/grid.jsonl`).
 

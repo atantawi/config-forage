@@ -46,9 +46,13 @@ def endpoint_picker_config(family: str, weights: dict[str, float] | None = None)
 
 def to_blis(config: dict) -> dict:
     """config with its router knobs replaced by `epp_config` (an EndpointPickerConfig); identity when
-    it has none. Raises ValueError for a weight knob without a family, or one the family lacks."""
+    it has none. Raises ValueError for a weight knob without a family, one the family lacks, or
+    router knobs next to an explicit `epp_config` (two router representations: neither may win)."""
     if not any(k in config for k in ROUTER_KNOBS):
         return config
+    if "epp_config" in config:
+        raise ValueError(f"router knobs {sorted(k for k in ROUTER_KNOBS if k in config)} conflict with "
+                         f"an explicit epp_config: give one or the other")
     rest = {k: v for k, v in config.items() if k not in ROUTER_KNOBS}
     weights = {WEIGHT_KNOBS[k]: config[k] for k in WEIGHT_KNOBS if k in config}
     if FAMILY_KNOB not in config:

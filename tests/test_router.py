@@ -40,6 +40,17 @@ def test_to_blis():
     assert set(out) == {"tp", "epp_config"} and weights(out["epp_config"])["active-request-scorer"] == 4
     with pytest.raises(ValueError, match="need endpoint_picker_config"):
         router.to_blis({"queue_scorer_weight": 2})
+    explicit = router.endpoint_picker_config("prefix-affinity")
+    assert router.to_blis({"tp": 8, "epp_config": explicit}) == {"tp": 8, "epp_config": explicit}
+
+
+@pytest.mark.parametrize("knobs", [{"endpoint_picker_config": "load-only"}, {"queue_scorer_weight": 2}])
+def test_flat_knobs_and_explicit_epp_config_conflict(knobs):
+    cfg = {"tp": 8, "epp_config": router.endpoint_picker_config("prefix-affinity"), **knobs}
+    with pytest.raises(ValueError, match="conflict with an explicit epp_config"):
+        router.to_blis(cfg)
+    with pytest.raises(run_blis.ConfigError, match="conflict"):  # the runner records it as an error row
+        run_blis.classify_config(cfg)
 
 
 def test_cache_key_covers_epp_and_runner_passes_it(tmp_path):
