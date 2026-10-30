@@ -52,7 +52,14 @@ It ends by printing four exports; set them in your shell:
 A space is a YAML file (`spaces/`): the scenario (model, hardware, workload, GPU budget, SLO,
 headroom, requests per point) and the knobs with their values. Adding a knob is a pure YAML addition.
 `spaces/screen/` holds wide screening spaces for `scripts/sensitivity.py`. Their one-axis spreads
-decide which knobs a benchmark space pins.
+decide which knobs a benchmark space pins:
+
+```sh
+# 0. Screen: vary one knob at a time around a base; repeat at several bases (a gated knob is
+#    varied only at a base where it applies). --jsonl keeps the records; stdout adds the tables.
+uv run python scripts/sensitivity.py spaces/screen/glm53-h100-chatbot-32-screen.yaml --cache cache \
+    --base '{"tp":8,"dp":2}' --jsonl results/screen-mn/sensitivity.jsonl
+```
 
 ```sh
 SPACE=spaces/glm53flash-h100-chatbot-16.yaml    # S-mid v3; S-mn: spaces/glm53-h100-chatbot-32.yaml
@@ -138,9 +145,8 @@ reach 1% (S-mid v3 / S-mn):
 - BSA + feasibility: 41 / 30
 - incumbent: 105 / 79
 
-S-mid v3's findings about the shape of the space are posted to
+These findings about the shape of the space, for both scenarios, are posted to
 [blis-config-search discussion #21](https://github.com/inference-sim/blis-config-search/discussions/21).
-S-mn's are to follow there (`docs/next-steps.md`).
 
 **S-mid v2** (BLIS v0.10.0, 80 requests per point; archived) is not comparable. DP lockstep in v0.11.0
 flipped its topology ranking, and its short runs were 2–10% off.
