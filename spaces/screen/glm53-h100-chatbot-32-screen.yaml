@@ -1,6 +1,7 @@
 # Screening space for S-mn (glm-5.3 fp8, 32 H100, chatbot; BLIS v0.14.0, engine 0.29.0); not a benchmark
 # space. Every candidate knob with wide value lists, for scripts/sensitivity.py at several bases, at the
-# converged 1280 requests per point. Results: docs/experiments/s-mn-screen.md.
+# converged 1280 requests per point. A gated knob is varied only at a base where it applies:
+# prefix_cache_scorer_weight needs a prefix-affinity base. Results: docs/experiments/s-mn-screen.md.
 scenario:
   model: glm-5.3
   hardware: h100

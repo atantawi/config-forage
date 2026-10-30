@@ -293,7 +293,8 @@ held-out rescoring both completed. It is not a method comparison.
 ## 2026-10-30 — S-mn: glm-5.3 on 32 H100 (multi-node required), screen and ground truth
 
 Details: `docs/experiments/s-mn-screen.md`. Space: `spaces/glm53-h100-chatbot-32.yaml`, 960 configs
-after pinning 7 axes that were flat (< 1%) at all 7 screened bases.
+after pinning 7 axes that were flat (< 1%) at all 7 screened bases. 3 more prefix-affinity bases,
+added in the PR #3 review, show the prefix-cache weight flat too (0%).
 
 - **Optimum: 25.94 tok/s per GPU** at 2 × tp16 + EP with inflight-load. 21 configs are within 1%,
   all of them that topology. Every other topology is at least 24% lower. 8 of the 22 topologies (tp
@@ -320,8 +321,11 @@ after pinning 7 axes that were flat (< 1%) at all 7 screened bases.
 | tpe | 165 | 2/5 |
 
 - **bsa-diag = bsa-feas again:** no rule fires.
-- **Held-out seeds 1–3:** every method's rank-1 config is the same config, the optimum, and its
-  held-out mean is −25.92. 61 of the 80 top-10 entries tie within 0.5%.
+- **Held-out seeds 1–3:** 9 configs tie exactly at the seed-0 optimum (25.94); they are
+  inflight-load with different non-zero kv and active weights. The methods' rank-1 picks differ among
+  them (all 9 are kv weight × active weight in {1, 2, 4}), and all of them score the same held-out
+  mean, −25.92. 61 of the 80 top-10 entries tie
+  within 0.5%.
 - **"Dirty" provenance:** cf-analyze flags all 40 traces as dirty. The checkout's only uncommitted
   changes were the pinned S-mn space file and the screening space, both committed afterwards in
   2c1530d. The space hash in the grid sidecar and in the bench manifest matches that commit.

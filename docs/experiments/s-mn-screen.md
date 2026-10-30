@@ -10,10 +10,13 @@ p99 ≤ 20 ms, headroom 0.8. Score = tok/s per GPU at ⌊0.8·C*⌋.
 79.2 GiB H100, whatever `max_model_len`, `gpu_memory_utilization` or KV dtype is set. So every
 instance spans 2 nodes (width 16) or 4 nodes (width 32) over ib-400g. That gives 22 topologies.
 
-## Screen (one axis at a time, 7 bases)
+## Screen (one axis at a time, 10 bases)
 
 Screening space: `spaces/screen/glm53-h100-chatbot-32-screen.yaml`. Raw output:
-`results/screen-mn/sensitivity.jsonl`, `results/screen-mn/summary.txt`. About 1,450 BLIS runs.
+`results/screen-mn/sensitivity.jsonl`, `results/screen-mn/summary.txt`. About 2,060 BLIS runs.
+
+The first 7 bases never use the `prefix-affinity` family, so `prefix_cache_scorer_weight`, which is
+gated to that family, was never varied. Three more bases (marked †) were added in review to screen it.
 
 | base | tok/s/GPU | axes that matter (one-axis spread) |
 |---|---|---|
@@ -21,16 +24,21 @@ Screening space: `spaces/screen/glm53-h100-chatbot-32-screen.yaml`. Raw output:
 | 2 × tp16 + EP, inflight-load | 25.9 | EP 30% |
 | 2 × tp8·dp2 + EP, ext LB, inflight-load | 19.7 | EP 34%; router family 13%; active weight 4% |
 | 2 × tp8·dp2 + EP | 17.6 | EP 61%; router family 11%; DP LB 3% |
-| 2 × tp4·dp4 + EP | 14.9 | EP 68%; **DP LB 49%** (external fails); router family 10% |
+| 2 × tp4·dp4 + EP | 14.9 | EP 68%; **DP LB 49%** (external: 7.6, C* 5); router family 10% |
 | 1 × tp32 + EP (4 nodes) | 13.9 | EP 35% |
 | 1 × tp8·dp4 + EP (4 nodes) | 9.9 | EP 29%; DP LB 7% |
+| 2 × tp16 + EP, prefix-affinity † | 25.8 | kv weight 0 −11%; prefix weight 0% |
+| 2 × tp8·dp2 + EP, prefix-affinity † | 17.6 | router family 11%; prefix weight 0% |
+| 2 × tp4·dp4 + EP, prefix-affinity † | 14.9 | router family 10%; prefix weight 0% |
 
 **Under 1% at every base**, so pinned in S-mn:
 - `cache_dtype`: max 0.9%.
 - `gpu_memory_utilization`, `block_size` (64/128), `scheduler`, `preemption_policy`: 0%.
 - `max_num_batched_tokens`: max 0.4%.
 - `max_num_seqs`: max 0.6%. This differs from S-mid v3, where it cost up to 43% at 1 × tp8·dp2.
-- Queue weight: 0%.
+- Queue weight: 0% (7 bases); prefix-cache weight: 0% at the 3 prefix-affinity bases.
+
+Neither weight is a knob in S-mn: each router family keeps its own weights.
 
 ## Ground truth
 
@@ -54,7 +62,9 @@ ms at c = 1. A single c = 1 run of those dp-heavy shapes takes 100–250 s of wa
 | 8 topologies (tp ≤ 2) | fail | — |
 
 - **Within 1%:** 21 configs, all of them 2 × tp16 + EP. That is 21 of that topology's 24 configs.
-  The 3 below are exactly the kv-weight-0 configs (−11%).
+  Six of the 24 have kv weight 0. The 3 inflight-load ones with a non-zero active weight stay at
+  −0.04%: the active-request scorer still balances. The 3 below the plateau (−11%) are kv weight 0
+  with no balancing scorer left: load-only, prefix-affinity, and inflight-load with active weight 0.
 - **Within 0.5%:** 12 configs.
 - **The 1% plateau ends in a cliff.** Nothing scores between −1% and −11% (within 2% and within 5%
   are also 21 configs).

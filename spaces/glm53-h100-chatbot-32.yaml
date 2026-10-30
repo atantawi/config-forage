@@ -4,7 +4,8 @@
 # dtype), so every instance spans 2 or 4 nodes (width 16 or 32) over ib-400g.
 # Axes under 1% at every one of 7 screened bases are pinned (docs/experiments/s-mn-screen.md):
 # cache_dtype, gpu_memory_utilization, max_num_batched_tokens, block_size, max_num_seqs, scheduler,
-# preemption_policy; queue and prefix-cache weights are not knobs (each family keeps its own).
+# preemption_policy; queue and prefix-cache weights are not knobs (each family keeps its own; the
+# prefix-cache weight was screened at 3 more prefix-affinity bases: 0%).
 # The default topology (tp16 + EP, the narrowest that fits) was chosen before the screen, which then
 # found it best, so "default near-optimal" here is not independent evidence.
 scenario:

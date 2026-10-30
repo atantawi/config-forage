@@ -138,8 +138,9 @@ reach 1% (S-mid v3 / S-mn):
 - BSA + feasibility: 41 / 30
 - incumbent: 105 / 79
 
-These findings about the shape of the space are posted to
+S-mid v3's findings about the shape of the space are posted to
 [blis-config-search discussion #21](https://github.com/inference-sim/blis-config-search/discussions/21).
+S-mn's are to follow there (`docs/next-steps.md`).
 
 **S-mid v2** (BLIS v0.10.0, 80 requests per point; archived) is not comparable. DP lockstep in v0.11.0
 flipped its topology ranking, and its short runs were 2–10% off.
