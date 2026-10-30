@@ -1,3 +1,8 @@
+> **Archived (BLIS v0.10.0, 80 requests per point).** Superseded by `s-mid-v3-screen.md` (BLIS
+> v0.14.0). DP lockstep in v0.11.0 reordered the topologies, and 80-request runs were 2–10% off, so
+> the numbers below do not carry over. The one-node rule and the BLIS-native routing knobs here no
+> longer apply. Kept as a record of the v2 benchmark.
+
 # S-mid: glm-5.3-flash on 16 H100, chatbot (real BLIS)
 
 Two versions. **S-mid v1** (sections up to "Incumbent") is the first space, with the brief's axes.

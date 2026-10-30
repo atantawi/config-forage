@@ -1,9 +1,12 @@
 """One-axis sensitivity of tps_per_gpu around a base config, with real BLIS (cached).
 
     uv run python scripts/sensitivity.py SPACE --cache cache/ [--base '{"tp":4,"dp":2}'] [--workers 9]
+        [--jsonl OUT.jsonl]
 
 Prints one JSON line per probed variant and a per-axis summary (spread = (max-min)/max over the
-axis's scored values, in %). Infeasible topology variants are skipped."""
+axis's scored values, in %). Infeasible topology variants are skipped. --jsonl also appends the
+records alone, as valid JSONL ({"kind": "base"} then {"kind": "variant", "at_base": ...}), so a
+stdout transcript is never the data file."""
 
 from __future__ import annotations
 
@@ -25,6 +28,7 @@ def main() -> None:
     ap.add_argument("--cache", type=Path, required=True)
     ap.add_argument("--base", default="{}", help="JSON overrides of the default config")
     ap.add_argument("--workers", type=int, default=9)
+    ap.add_argument("--jsonl", type=Path, help="append the base and variant records here, as JSONL")
     a = ap.parse_args()
     sp = load_space(a.space)
     runner = CachedRunner(BlisEnv.from_env(), sp.scenario, a.cache)
@@ -53,11 +57,16 @@ def main() -> None:
     t0 = time.monotonic()
     res = run_batch(one, jobs, a.workers)
     b = res[0][2]
-    print(json.dumps({"base": base, "tps_per_gpu": b.tps_per_gpu, "c_star": b.c_star}))
-    for name, v, p in res[1:]:
-        if p is not None:
-            print(json.dumps({"axis": name, "value": v, "tps_per_gpu": p.tps_per_gpu, "c_star": p.c_star,
-                              "c_use": p.c_use, "diag": p.diagnostics}))
+    recs = [{"base": base, "tps_per_gpu": b.tps_per_gpu, "c_star": b.c_star}]
+    recs += [{"axis": name, "value": v, "tps_per_gpu": p.tps_per_gpu, "c_star": p.c_star,
+              "c_use": p.c_use, "diag": p.diagnostics} for name, v, p in res[1:] if p is not None]
+    for r in recs:
+        print(json.dumps(r))
+    if a.jsonl:
+        with a.jsonl.open("a") as f:
+            for r in recs:
+                tagged = {"kind": "base", **r} if "base" in r else {"kind": "variant", "at_base": base, **r}
+                f.write(json.dumps(tagged) + "\n")
     print("| axis | value: tps/GPU (C*) | spread % |")
     print("|---|---|---|")
     for k in sp.knobs:

@@ -201,7 +201,7 @@ before this change carry no provenance. That is not flagged when it is the only 
 **Spec amended** to match the implemented rules: an infeasible sample costs 1 run, C* is searched
 upward without a ceiling, and a run that sheds requests counts as a failure.
 
-Open, in priority order:
+Open, in priority order (superseded: the current list is `docs/next-steps.md`):
 1. **Multi-node instances.** Should the one-node rule be relaxed? This is the user's decision. If
    yes, allow widths that are a multiple of 8 up to the budget, then regrid.
 2. **S-large benchmark.** No grid; compare methods on best-found against budget. This is the actual
@@ -289,3 +289,43 @@ held-out rescoring both completed. It is not a method comparison.
   rank-1 config is a tie, so no search winner is a seed-0 artifact.
 - **SMAC warnings:** it emits numpy "mean of empty slice" warnings from its local-search timing. They
   are harmless.
+
+## 2026-10-30 — S-mn: glm-5.3 on 32 H100 (multi-node required), screen and ground truth
+
+Details: `docs/experiments/s-mn-screen.md`. Space: `spaces/glm53-h100-chatbot-32.yaml`, 960 configs
+after pinning 7 axes that were flat (< 1%) at all 7 screened bases. 3 more prefix-affinity bases,
+added in the PR #3 review, show the prefix-cache weight flat too (0%).
+
+- **Optimum: 25.94 tok/s per GPU** at 2 × tp16 + EP with inflight-load. 21 configs are within 1%,
+  all of them that topology. Every other topology is at least 24% lower. 8 of the 22 topologies (tp
+  ≤ 2) fail at c = 1.
+- **Engine knobs: none matter.** `max_num_seqs`, which mattered in S-mid v3 at dp > 1, is flat
+  here. EP (29–68%) and topology carry the signal. Router family and DP LB matter only at dp > 1.
+- **Same structure as S-mid v3, with steeper cliffs.** Like S-mid, it cannot separate search
+  methods. The default (chosen as the narrowest fit) is 0.51% from the optimum.
+- **Harness cost:** a c = 1 run of the dp16/dp32 shapes takes 100–250 s at 1280 requests, only to
+  fail. A short pre-check at c = 1 would save most of the grid's first hour (next-steps).
+
+### S-mn sanity benchmark (budget 300, seeds 0–4)
+
+`results/s-mn/runs`, `results/s-mn/analysis`. Every BLIS run came from the grid's cache.
+
+| method | runs to 1% (median) | seeds within 0.5% at B = 200 |
+|---|---|---|
+| coord-ascent | 9 | 5/5 (starts at the default) |
+| bsa-feas | 30 | 3/5 |
+| random | 30 | 2/5 |
+| smac | 47 | 4/5 |
+| incumbent | 79 | 5/5 |
+| bsa (no biaser) | 93 | 4/5 |
+| tpe | 165 | 2/5 |
+
+- **bsa-diag = bsa-feas again:** no rule fires.
+- **Held-out seeds 1–3:** 9 configs tie exactly at the seed-0 optimum (25.94); they are
+  inflight-load with different non-zero kv and active weights. The methods' rank-1 picks differ among
+  them (all 9 are kv weight × active weight in {1, 2, 4}), and all of them score the same held-out
+  mean, −25.92. 61 of the 80 top-10 entries tie
+  within 0.5%.
+- **"Dirty" provenance:** cf-analyze flags all 40 traces as dirty. The checkout's only uncommitted
+  changes were the pinned S-mn space file and the screening space, both committed afterwards in
+  2c1530d. The space hash in the grid sidecar and in the bench manifest matches that commit.
