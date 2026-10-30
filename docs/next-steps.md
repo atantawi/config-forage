@@ -9,8 +9,7 @@ S-mid v3 (glm-5.3-flash, 16 H100) and S-mn (glm-5.3, 32 H100) are both **chatbot
 SLO**. In both, one topology dominates, and almost every engine knob is flat (under 1%). The
 default topology is at or near the optimum, and one-knob-at-a-time search finds it at once. Neither
 scenario can show a BSA advantage. Both keep their value as findings about the search space: S-mid
-v3's are posted to blis-config-search discussion #21, and S-mn's are to follow (see "Other open
-items").
+v3's and S-mn's are both posted to blis-config-search discussion #21 (2026-10-30).
 
 The next scenarios should make more engine knobs matter:
 
@@ -42,7 +41,6 @@ Add upstream's skill-driven experiment design ([blis-config-search PR #22](https
 ## Other open items
 
 - **S-large benchmark:** no grid; compare the methods on best-found against budget.
-- **Second set for RFC #21:** post S-mn's findings in the same thread, linking `main` once PR #3 is merged. The draft has been shown to the user.
 - **Feedback on blis-config-search PR #22:** try the experiment skill and leave review comments on the PR. Raise the `max(80, 4c)` requests per run at `scripts/run_experiment.py:603`.
 - **Cheap c = 1 pre-check:** a config whose ITL at c = 1 already breaks the SLO fails after one run,
   but at 1280 requests that run takes 100–250 s on dp16/dp32 shapes. A short run at c = 1 (e.g. 80
