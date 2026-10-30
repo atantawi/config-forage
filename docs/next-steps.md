@@ -35,13 +35,13 @@ Add upstream's skill-driven experiment design ([blis-config-search PR #22](https
 - **Clean room.** Run the skill as a fresh agent in a worktree with no `results/`, `docs/`, research log or grid data, and no access to this repo's findings. Note that the skill's own reference notes contain measured findings, which counts as legitimate domain knowledge.
 - **Variation.** The skill is nondeterministic, so run it 5–10 times and treat each run as a seed.
 - **Budget.** A spec has no notion of a run budget. Either ask the skill to fit one, or compare at the size it chooses. Record which was done.
-- **Pins.** Pin a specific PR #22 commit. PR #22 targets BLIS v0.12.0 and we run v0.14.0; the knob names match RFC #21, so the translation is mechanical.
+- **Pins.** PR #22 was merged on 2026-10-30; pin the blis-config-search `main` commit the arm uses. It targets BLIS v0.12.0 and we run v0.14.0; the knob names match RFC #21, so the translation is mechanical.
+- **Request count.** The merged sweeper still runs `max(80, 4c)` requests (`scripts/run_experiment.py:613`). The arm scores configs with our 1280-request probe, so this does not affect it. The issue is already raised in our first RFC #21 comment.
 - **Hybrid.** Use an LLM-designed spec as BSA's prior: the LLM proposes, BSA refines. Compare it against both on their own.
 
 ## Other open items
 
 - **S-large benchmark:** no grid; compare the methods on best-found against budget.
-- **Feedback on blis-config-search PR #22:** try the experiment skill and leave review comments on the PR. Raise the `max(80, 4c)` requests per run at `scripts/run_experiment.py:603`.
 - **Cheap c = 1 pre-check:** a config whose ITL at c = 1 already breaks the SLO fails after one run,
   but at 1280 requests that run takes 100–250 s on dp16/dp32 shapes. A short run at c = 1 (e.g. 80
   requests) could reject it first. It must not change any scored result: a config that fails short
