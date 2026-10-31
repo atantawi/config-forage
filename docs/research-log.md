@@ -371,3 +371,16 @@ added in the PR #3 review, show the prefix-cache weight flat too (0%).
   They stay valid as `distribution` runs, but the new keys differ, so a rerun of the old spaces pays for
   its runs again.
 
+## 2026-10-31 — PR #6 merged; RFC #21 corrected
+
+- **Merged:** PR #6. The runner passes a preset's token shape as flags. Its review added the BLIS
+  bound checks, so a malformed preset is refused once, at runner construction.
+- **Upstream already had the fix:** blis-config-search PR #19 (merged 2026-10-29) found the same
+  `--workload`/`--concurrency` bug and fixed it the same way. Our runner was vendored from
+  `1a6dc6f` (2026-10-26), before that fix, and our two RFC #21 posts came after it.
+- **Posted:** a [correction](https://github.com/inference-sim/blis-config-search/discussions/21#discussioncomment-19314444)
+  to RFC #21. It says to read both scenarios as 512/512 `distribution`, ITL p99 ≤ 20 ms, that they
+  are not chatbot results (the S-mid v3 default goes from 67.0 to 42.0 tok/s/GPU on chatbot), and that
+  the comparison with the RFC's chatbot engine-tuning example was not like for like. Both original
+  posts now open with a note pointing to the correction.
+
