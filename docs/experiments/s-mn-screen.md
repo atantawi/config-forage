@@ -1,9 +1,14 @@
-# S-mn: glm-5.3 on 32 H100, chatbot, BLIS v0.14.0 — screen and ground truth
+# S-mn: glm-5.3 on 32 H100, 512/512 distribution, BLIS v0.14.0 — screen and ground truth
+
+> **Workload correction (2026-10-31).** Every run here passed `--workload chatbot` with `--concurrency`,
+> which BLIS ignores, so the workload was BLIS's 512/512 `distribution` defaults (stdev 256, max 7000),
+> not chatbot (256/256, max 800/1024). Read "chatbot" below as `distribution`; the numbers stand for
+> that workload. See the research log, 2026-10-30.
 
 Stack: inference-sim v0.14.0 @ f2ba6bb (kernel v0.4.0, blis-vllm v0.32.0), blis-catalog 0.3.0,
 blis-registry v0.2.0, `engine_version: "0.29.0"`, 1280 requests per point.
 
-**Scenario:** glm-5.3 (MoE, 256 routed experts, 64 KV heads), fp8 weights, on 32 H100s, chatbot, ITL
+**Scenario:** glm-5.3 (MoE, 256 routed experts, 64 KV heads), fp8 weights, on 32 H100s, 512/512 `distribution` workload, ITL
 p99 ≤ 20 ms, headroom 0.8. Score = tok/s per GPU at ⌊0.8·C*⌋.
 
 **Multi-node is required.** At tp·dp = 8 the kernel reports 88.4 GiB of fixed occupancy per rank on a

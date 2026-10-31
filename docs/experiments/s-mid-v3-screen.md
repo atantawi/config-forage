@@ -1,4 +1,9 @@
-# S-mid v3 screening: glm-5.3-flash on 16 H100, chatbot, BLIS v0.14.0
+# S-mid v3 screening: glm-5.3-flash on 16 H100, 512/512 distribution, BLIS v0.14.0
+
+> **Workload correction (2026-10-31).** Every run here passed `--workload chatbot` with `--concurrency`,
+> which BLIS ignores, so the workload was BLIS's 512/512 `distribution` defaults (stdev 256, max 7000),
+> not chatbot (256/256, max 800/1024). Read "chatbot" below as `distribution`; the numbers stand for
+> that workload. See the research log, 2026-10-30.
 
 Stack: inference-sim v0.14.0 @ f2ba6bb (kernel v0.4.0, blis-vllm v0.32.0), blis-catalog 0.3.0,
 blis-registry v0.2.0, `engine_version: "0.29.0"`. glm-5.3-flash's catalog `config.json` is the same
@@ -108,7 +113,7 @@ there is no round-robin family.
 ## Request count (num_requests_base 80 → 1280)
 
 One probe point simulates `max(base, 4c)` requests. At the old base of 80 a run covers only ~30–70
-s of simulated time and takes ~0.5 s of wall time. The closed-loop chatbot sessions have barely left
+s of simulated time and takes ~0.5 s of wall time. The closed-loop sessions have barely left
 their cold start by then (the first round's TTFT is 2–5× the warm one), so throughput is
 under-estimated, and by a different amount per topology.
 
