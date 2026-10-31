@@ -3,6 +3,7 @@
 import shutil
 
 import pytest
+import yaml
 
 from config_forage.blis import run_blis, workloads
 from config_forage.blis.runner import BlisEnv, CachedRunner, cache_key
@@ -49,6 +50,56 @@ def test_distribution_needs_no_catalog():
 def test_refused(catalog, name, msg):
     with pytest.raises(ValueError, match=msg):
         workloads.shape(name, catalog)
+
+
+BOUNDS = [  # (prompt override, message): each of the checks BLIS's validateDistributionParams makes
+    ({"tokens_min": 0}, "must be >= 1"),
+    ({"tokens_max": 0, "tokens_min": 0}, "must be >= 1"),
+    ({"tokens_stdev": -1}, "must be >= 0"),
+    ({"tokens_min": 900, "tokens": 900, "tokens_stdev": 900}, "must be <= tokens_max"),
+    ({"tokens": 801}, r"must be in \[tokens_min, tokens_max\]"),
+    ({"tokens": 1}, r"must be in \[tokens_min, tokens_max\]"),
+    ({"tokens_stdev": 801}, r"must be in \[tokens_min, tokens_max\]"),
+    ({"tokens_min": 50, "tokens_stdev": 10}, r"must be in \[tokens_min, tokens_max\]"),
+    ({"tokens": 256.5}, "must be an integer"),
+    ({"tokens_max": True}, "must be an integer"),
+]
+
+
+def _preset(prompt_over=None, prefix=0):
+    prompt = {"tokens": 256, "tokens_stdev": 100, "tokens_min": 2, "tokens_max": 800, **(prompt_over or {})}
+    out = {"tokens": 256, "tokens_stdev": 100, "tokens_min": 1, "tokens_max": 1024}
+    return yaml.safe_dump({"prefix_tokens": prefix, "prompt": prompt, "output": out})
+
+
+@pytest.mark.parametrize("over, msg", BOUNDS)
+def test_bounds_refused(catalog, over, msg):
+    (catalog / "workloads" / "bad.yaml").write_text(_preset(over))
+    with pytest.raises(ValueError, match=msg):
+        workloads.shape("bad", catalog)
+
+
+def test_stdev_zero_is_allowed_below_min(catalog):
+    (catalog / "workloads" / "fixed.yaml").write_text(_preset({"tokens_stdev": 0}))
+    assert workloads.shape("fixed", catalog)["prompt"]["tokens_stdev"] == 0
+
+
+@pytest.mark.parametrize("prefix", [-1, 1.5])
+def test_prefix_refused(catalog, prefix):
+    (catalog / "workloads" / "bad.yaml").write_text(_preset(prefix=prefix))
+    with pytest.raises(ValueError, match="prefix_tokens"):
+        workloads.shape("bad", catalog)
+
+
+def test_bad_preset_refused_before_any_run(catalog, tmp_path):
+    (catalog / "workloads" / "bad.yaml").write_text(_preset({"tokens_min": 900}))
+    with pytest.raises(ValueError, match="tokens_min"):
+        CachedRunner(BlisEnv("blis", catalog, "reg", tmp_path / "sc"),
+                     Scenario("m", "h100", "bad", 8, "0.29.0"), tmp_path / "c")
+
+
+def test_distribution_shape_passes_the_bounds():
+    assert workloads._bounds_problem(workloads.DISTRIBUTION_SHAPE) is None
 
 
 def test_cli_flags(catalog):

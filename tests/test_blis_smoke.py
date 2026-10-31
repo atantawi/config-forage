@@ -47,3 +47,16 @@ def test_workload_reaches_blis(tmp_path):
         assert r["error"] is None, r.get("stderr_tail")
         per_req[w] = r["metrics"]["total_input_tokens"] / r["metrics"]["injected_requests"]
     assert 230 < per_req["chatbot"] < 280 and 480 < per_req["distribution"] < 560  # means 256 and 512
+
+
+def test_catalog_presets_pass_the_bounds():
+    """Every shape preset in the pinned catalog resolves (the bounds match what BLIS accepts)."""
+    from pathlib import Path
+
+    from config_forage.blis import workloads
+    names = sorted(p.stem for p in (Path(os.environ["BLIS_CATALOG"]) / "workloads").glob("*.yaml"))
+    shapes = [n for n in names if "replay:" not in (Path(os.environ["BLIS_CATALOG"]) / "workloads" / f"{n}.yaml").read_text()]
+    assert {"chatbot", "multidoc"} <= set(shapes)
+    for n in shapes:
+        workloads.shape(n, os.environ["BLIS_CATALOG"])
+

@@ -43,13 +43,41 @@ def shape(name: str, catalog: str | Path | None) -> dict:
     unknown = set(raw) - {"prefix_tokens", "prompt", "output"}
     if unknown:
         raise ValueError(f"workload {name!r}: unknown keys {sorted(unknown)} in {path}")
-    out = {"prefix_tokens": int(raw.get("prefix_tokens", 0))}
+    out = {"prefix_tokens": raw.get("prefix_tokens", 0)}
     for side in ("prompt", "output"):
         d = raw.get(side) or {}
         if set(d) != set(_SIDE_KEYS):
             raise ValueError(f"workload {name!r}: {side} must state exactly {list(_SIDE_KEYS)} ({path})")
-        out[side] = {k: int(d[k]) for k in _SIDE_KEYS}
+        out[side] = dict(d)
+    problem = _bounds_problem(out)
+    if problem:
+        raise ValueError(f"workload {name!r}: {problem} ({path})")
     return out
+
+
+def _bounds_problem(s: dict) -> str | None:
+    """Why BLIS would refuse shape `s`, else None: the checks of its validateDistributionParams
+    (inference-sim v0.14.0 cmd/root.go:199-231) and --prefix-tokens >= 0 (cmd/root.go:904), so a
+    malformed preset is refused once, here, not by a failed BLIS run per candidate."""
+    for side in ("prompt", "output"):
+        for k in _SIDE_KEYS:
+            v = s[side][k]
+            if not isinstance(v, int) or isinstance(v, bool):
+                return f"{side}.{k} must be an integer, got {v!r}"
+    p = s["prefix_tokens"]
+    if not isinstance(p, int) or isinstance(p, bool) or p < 0:
+        return f"prefix_tokens must be an integer >= 0, got {p!r}"
+    for side in ("prompt", "output"):
+        mean, sd, lo, hi = (s[side][k] for k in _SIDE_KEYS)
+        if lo < 1 or hi < 1:
+            return f"{side}.tokens_min and tokens_max must be >= 1, got {lo} and {hi}"
+        if sd < 0:
+            return f"{side}.tokens_stdev must be >= 0, got {sd}"
+        if lo > hi:
+            return f"{side}.tokens_min ({lo}) must be <= tokens_max ({hi})"
+        if not lo <= mean <= hi or sd > hi or (sd != 0 and sd < lo):
+            return f"{side}.tokens and tokens_stdev must be in [tokens_min, tokens_max] = [{lo}, {hi}]"
+    return None
 
 
 def cli_flags(s: dict) -> list[str]:
