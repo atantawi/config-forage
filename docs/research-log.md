@@ -384,3 +384,18 @@ added in the PR #3 review, show the prefix-cache weight flat too (0%).
   the comparison with the RFC's chatbot engine-tuning example was not like for like. Both original
   posts now open with a note pointing to the correction.
 
+## 2026-10-31 — Real chatbot screen (glm-5.3-flash, 16 H100)
+
+- **New laptop (Apple M5 Max, 18 cores).** One BLIS run is 2.17× faster than on the old machine
+  (13 identical runs compared, 1.9–2.5× each). Grids now use 15 workers instead of 9.
+- **Pre-screen** (6 topologies, several workload/SLO variants). Summarization is dropped. Chatbot at
+  ITL 30 ms narrows the topology gaps to 3%. Chatbot's ITL p99 at 2 × tp8 + EP jumps from 8.9 ms
+  (c = 7) to 22.4 ms (c = 8) on workload seeds 0–3 alike, while p90/p95 stay near 8.4 ms: a
+  deterministic cliff that C* lands on.
+- **Screen** (6 bases, every S-mid v3 knob, 1280 requests; `docs/experiments/chatbot-screen.md`):
+  1 × tp8·dp2 + EP (96.2 tok/s/GPU) and 1 × tp16 + EP (77.6) beat 2 × tp8 + EP (42.0), reversing
+  S-mid v3. `max_num_seqs` below 256 costs 84% at tp8·dp2 and 74% at tp16 but under 1% elsewhere. EP
+  9–87%, router 19–20% at tp4·dp2 and tp2·dp4.
+- **Decided with the user:** S-chat (7,680 configs) is the main BSA benchmark; its grid is running. A
+  second real-workload scenario, screened alongside, is the clean-room test of LLM-designed sweeps.
+  Because this repo is public, its space and findings are kept out of it until that test has run.
