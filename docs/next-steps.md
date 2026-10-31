@@ -17,26 +17,22 @@ and fixed the bug in its own runner (PR #19, 2026-10-29); ours was vendored befo
 inference-sim issue has been filed (the user's choice); BLIS v0.14.0 still ignores `--workload` with
 `--concurrency`.
 
-The next scenarios should make more engine knobs matter:
+**Screened (2026-10-31): real chatbot on glm-5.3-flash, 16 H100** (`docs/experiments/chatbot-screen.md`).
+It has an engine knob whose effect depends on topology, and an optimum away from the default, which
+S-mid v3 and S-mn lacked:
 
-1. **Add a TTFT SLO** (e.g. `ttft_p99_ms`) to the same scenarios. Prefill knobs
-   (`max_num_batched_tokens`, chunking) and the router then become binding. This also gives the
-   diagnostic biaser live rules for the first time: `ttft_bound` → `max_num_batched_tokens`.
-2. **A different workload:**
-   - `multidoc`: long, shared-prefix prompts. Prefix caching, the prefix-affinity router, and KV
-     memory should matter.
-   - `agentx-mvp`: agentic replay with long contexts (a replay workload: the runner refuses it until
-     replay is supported). KV pressure brings in `max_num_seqs`,
-     `gpu_memory_utilization`, `cache_dtype` and `max_model_len`.
-3. **kimi-k2.5 on H100.** Whether one node fits depends on the engine knobs (gmu 0.95, or fp8 KV
-   with max_model_len ≤ 16k), so memory and topology interact.
-
-Before choosing, screen each candidate at 1280 requests. Check that more than the topology carries
-signal, then grid the pinned space.
+- **S-chat** (`spaces/glm53flash-h100-chatbot-real-16.yaml`, 7,680 configs): chatbot, ITL p99 ≤ 20 ms.
+  Topology ranking reversed from S-mid v3 (1 × tp8·dp2 + EP 96.2 vs 2 × tp8 + EP 42.0 tok/s/GPU), and
+  `max_num_seqs` is worth 74–84% at the one-instance shapes but under 1% at the others. **The main BSA
+  benchmark.** Grid running (2026-10-31).
+- **A second real-workload scenario** was screened alongside it and is reserved as **the clean-room
+  scenario for the LLM-designed-sweep arm** (decided with the user, 2026-10-31). This repo is public, so
+  its space, screen and grid stay out of the repo until that test has run.
+- Dropped: summarization. Still open: agentx-mvp (needs replay support) and kimi-k2.5 on H100.
 
 ## LLM-designed sweeps as a search arm (decided with the user, 2026-10-30)
 
-Add upstream's skill-driven experiment design ([blis-config-search PR #22](https://github.com/inference-sim/blis-config-search/pull/22)) to the benchmark portfolio, next to BSA, the incumbent and the baselines. **Test it on the next scenario** (a TTFT-SLO or multidoc/agentx one), not on S-mid v3 or S-mn. Their findings are public (RFC #21) or about to be, so they would contaminate the test.
+Add upstream's skill-driven experiment design ([blis-config-search PR #22](https://github.com/inference-sim/blis-config-search/pull/22)) to the benchmark portfolio, next to BSA, the incumbent and the baselines. **Test it on the reserved clean-room scenario**, not on S-mid v3, S-mn or S-chat. Their findings are public (RFC #21) or about to be, so they would contaminate the test.
 
 - **Arm.** The skill writes a spec for the scenario. We expand the spec to its configs, keep those that match our GPU budget, and score each with our probe. Scoring with the spec's own concurrency list is a second variant. The trace follows the spec's order; the budget is unique BLIS runs. LLM tokens and wall time go in a separate cost column.
 - **Clean room.** Run the skill as a fresh agent in a worktree with no `results/`, `docs/`, research log or grid data, and no access to this repo's findings. Note that the skill's own reference notes contain measured findings, which counts as legitimate domain knowledge.

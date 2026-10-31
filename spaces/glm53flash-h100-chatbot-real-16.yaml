@@ -1,0 +1,30 @@
+# S-chat (BLIS v0.14.0, engine 0.29.0): glm-5.3-flash on 16 H100s, the real chatbot preset (256/256,
+# max 800/1024), ITL p99 <= 20 ms, headroom 0.8. S-mid v3's knobs on the workload it was meant to have.
+# The screen (docs/experiments/chatbot-screen.md) reverses S-mid v3's topology ranking and
+# makes max_num_seqs depend on topology; axes under 1% at every base are pinned, cache_dtype (3%) is kept.
+scenario:
+  model: glm-5.3-flash
+  hardware: h100
+  workload: chatbot
+  gpu_budget: 16
+  engine_version: "0.29.0"
+  slo: {itl_p99_ms: 20}
+  headroom: 0.8
+  seed: 0
+  num_requests_base: 1280  # scores converge here (docs/experiments/s-mid-v3-screen.md); 80 was 5-10% off
+  model_entry: {arch: MoE, heads_kv: 64, min_footprint: 8}  # weights fit only from tp·dp = 8 (BLIS memory model)
+knobs:
+  - {name: tp, values: [1, 2, 4, 8, 16], default: 8}
+  - {name: dp, values: [1, 2, 4, 8, 16], default: 1}
+  - {name: enable_expert_parallel, values: [false, true], default: true}
+  - {name: data_parallel_load_balancing, values: [internal, external], default: internal, requires: [dp, [2, 4, 8, 16]]}
+  - {name: quantization, values: [fp8]}
+  - {name: cache_dtype, values: [auto, fp8], default: fp8}  # 3% at tp8·dp2: kept
+  # pinned: < 1% at every probed base
+  - {name: gpu_memory_utilization, values: [0.9]}
+  - {name: max_num_batched_tokens, values: [8192]}
+  - {name: block_size, values: [64]}
+  - {name: max_num_seqs, values: [32, 64, 128, 256, 512], default: 256}
+  - {name: endpoint_picker_config, values: [load-only, inflight-load, prefix-affinity], default: load-only}
+  - {name: kv_cache_utilization_scorer_weight, values: [0, 1, 2, 4], default: 1}
+  - {name: active_request_scorer_weight, values: [0, 1, 2, 4], default: 2, requires: [endpoint_picker_config, [inflight-load]]}
