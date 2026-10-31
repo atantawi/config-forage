@@ -2,11 +2,10 @@
 # max 800/1024), ITL p99 <= 20 ms, headroom 0.8. S-mid v3's knobs on the workload it was meant to have.
 # The screen (docs/experiments/chatbot-screen.md) reverses S-mid v3's topology ranking and
 # makes max_num_seqs depend on topology; axes under 1% at every base are pinned, cache_dtype (3%) is kept.
-knobs: each family keeps its own (router.FAMILIES). v2 (BLIS v0.10.0) = git show c3473d1:spaces/glm53flash-h100-chatbot-16.yaml
 scenario:
   model: glm-5.3-flash
   hardware: h100
-  workload: distribution  # BLIS 512/512 defaults: what every run so far drew from (closed-loop BLIS ignored the old "chatbot"); see config_forage/blis/workloads.py
+  workload: chatbot
   gpu_budget: 16
   engine_version: "0.29.0"
   slo: {itl_p99_ms: 20}
