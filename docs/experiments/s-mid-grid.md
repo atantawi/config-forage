@@ -3,14 +3,19 @@
 > the numbers below do not carry over. The one-node rule and the BLIS-native routing knobs here no
 > longer apply. Kept as a record of the v2 benchmark.
 
-# S-mid: glm-5.3-flash on 16 H100, chatbot (real BLIS)
+# S-mid: glm-5.3-flash on 16 H100, 512/512 distribution (real BLIS)
+
+> **Workload correction (2026-10-31).** Every run here (BLIS v0.10.0 too) passed `--workload chatbot` with `--concurrency`,
+> which BLIS ignores, so the workload was BLIS's 512/512 `distribution` defaults (stdev 256, max 7000),
+> not chatbot (256/256, max 800/1024). Read "chatbot" below as `distribution`; the numbers stand for
+> that workload. See the research log, 2026-10-30.
 
 Two versions. **S-mid v1** (sections up to "Incumbent") is the first space, with the brief's axes.
 **S-mid v2** (from "Enrichment" on) is the committed `spaces/glm53flash-h100-chatbot-16.yaml`.
 The v1 YAML is `git show 40d4910:spaces/glm53flash-h100-chatbot-16.yaml`.
 
 Space: `spaces/glm53flash-h100-chatbot-16.yaml`. Scenario: glm-5.3-flash (MoE, 288 routed experts,
-64 KV heads, catalog 0.2.1), h100, chatbot, GPU budget 16, ITL p99 ≤ 20 ms, headroom 0.8, seed 0,
+64 KV heads, catalog 0.2.1), h100, 512/512 `distribution` workload, GPU budget 16, ITL p99 ≤ 20 ms, headroom 0.8, seed 0,
 engine_version 0.29.0. Precision follows upstream's glm run: `quantization: fp8` (single-value knob)
 and `cache_dtype` ∈ {auto, fp8}. Score = −tokens/s per GPU at c_use = ⌊0.8·C*⌋.
 

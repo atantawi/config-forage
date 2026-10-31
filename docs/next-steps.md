@@ -11,9 +11,11 @@ default topology is at or near the optimum, and one-knob-at-a-time search finds 
 scenario can show a BSA advantage. Both keep their value as findings about the search space: S-mid
 v3's and S-mn's are both posted to blis-config-search discussion #21 (2026-10-30).
 
-**First: correct RFC #21.** Both posts there say chatbot; the workload was BLIS's 512/512 defaults.
-Post a correction (draft for the user's approval) and report the `--workload`/`--concurrency` behaviour
-to inference-sim. Check whether blis-config-search's runner, which ours was vendored from, has it too.
+**RFC #21 corrected (2026-10-31).** A [correction](https://github.com/inference-sim/blis-config-search/discussions/21#discussioncomment-19314444)
+is posted, and both original posts carry a note pointing to it. blis-config-search had already found
+and fixed the bug in its own runner (PR #19, 2026-10-29); ours was vendored before that. No
+inference-sim issue has been filed (the user's choice); BLIS v0.14.0 still ignores `--workload` with
+`--concurrency`.
 
 The next scenarios should make more engine knobs matter:
 

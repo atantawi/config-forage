@@ -169,9 +169,10 @@ Details:
   hardware, so they are less validated than single-node ones.
 - **Workload.** Closed-loop `blis run --concurrency` ignores `--workload` and draws from its
   `--prompt-tokens*`/`--output-tokens*` defaults (512/512, max 7000). Every run before the
-  2026-10-30 fix passed `--workload chatbot` and drew from those defaults, so both ground truths are
+  2026-10-30 fix (PR #6) passed `--workload chatbot` and drew from those defaults, so both ground truths are
   that `distribution` workload, not chatbot (256/256, max 800/1024). The runner now passes a preset's
   token shape as flags (`config_forage/blis/workloads.py`). Replay workloads (`agentx-mvp`) are refused.
+  The RFC #21 posts are [corrected](https://github.com/inference-sim/blis-config-search/discussions/21#discussioncomment-19314444).
 - Both ground truths are `distribution` with an ITL-only SLO. Their flatness, the near-optimal default and
   the dead diagnostic biaser (no rule fires) are specific to that setting. In S-mn the default
   topology was chosen before the screen, so its closeness to the optimum is not independent evidence.
