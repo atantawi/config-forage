@@ -15,14 +15,17 @@ from pathlib import Path
 from typing import TypeVar
 
 from config_forage import router
-from config_forage.blis import run_blis
+from config_forage.blis import run_blis, workloads
 from config_forage.space import Scenario
 
 T = TypeVar("T")
 R = TypeVar("R")
 
+# The last entry is the runner's workload contract, not a BLIS pin: runs before it passed --workload,
+# which closed-loop BLIS ignores (they all drew from workloads.DISTRIBUTION_SHAPE), so cf-bench and
+# cf-grid refuse to resume into their results.
 PINS = ("inference-sim v0.14.0 f2ba6bb1c189ed5a56933cfa3d0927eae3836ee9", "kernel v0.4.0",
-        "blis-vllm v0.32.0", "catalog 0.3.0", "registry v0.2.0")
+        "blis-vllm v0.32.0", "catalog 0.3.0", "registry v0.2.0", "workload as token-shape flags")
 
 
 def requests_for(concurrency: int, base: int = 80) -> int:
@@ -45,17 +48,25 @@ class BlisEnv:
                    Path(e["BLIS_SCENARIOS"]))
 
 
-def cache_key(config: dict, concurrency: int, seed: int, scenario: Scenario) -> str:
+def cache_key(config: dict, concurrency: int, seed: int, scenario: Scenario, shape: dict | None = None) -> str:
+    """`shape` is the workload's token distribution (workloads.shape), keyed so a run is cached under
+    what it drew from. Keys written before it existed (no "shape") are for runs that all drew from
+    workloads.DISTRIBUTION_SHAPE whatever their workload name said, and never match a key with one."""
     payload = {"config": config, "concurrency": concurrency, "seed": seed, "workload": scenario.workload,
                "num_requests": requests_for(concurrency, scenario.num_requests_base),
                "model": scenario.model, "hardware": scenario.hardware,
                "engine_version": scenario.engine_version, "pins": PINS}
+    if shape is not None:
+        payload["shape"] = shape
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
 class CachedRunner:
     def __init__(self, env: BlisEnv | None, scenario: Scenario, cache_dir: Path, run_fn: Callable | None = None):
+        """With an env, the scenario's workload is resolved to its shape here, so an unknown or replay
+        workload is refused before any run. Without one (a test double), the shape is not keyed."""
         self.env, self.scenario, self.cache_dir = env, scenario, Path(cache_dir)
+        self.shape = workloads.shape(scenario.workload, env.catalog) if env is not None else None
         self.run_fn = run_fn or self._blis_run
         self.unique_runs = 0
         self.cache_hits = 0
@@ -99,7 +110,7 @@ class CachedRunner:
             config = router.to_blis(config)
         except ValueError:
             pass
-        key = cache_key(config, concurrency, seed, self.scenario)
+        key = cache_key(config, concurrency, seed, self.scenario, self.shape)
         with self._lock:
             klock = self._key_locks.setdefault(key, threading.Lock())
         with klock:  # concurrent requests for one key call BLIS once

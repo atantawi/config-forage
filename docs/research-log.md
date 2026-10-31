@@ -346,3 +346,28 @@ added in the PR #3 review, show the prefix-cache weight flat too (0%).
 - **Open next:** feedback on blis-config-search PR #22 (the experiment skill), then a scenario that can
   separate the methods (TTFT SLO or multidoc/agentx), run in a clean room so that it also serves as
   the first test of LLM-designed sweeps. See `docs/next-steps.md`.
+
+## 2026-10-30 — Closed-loop BLIS ignored `--workload`: every run so far was 512/512, not chatbot
+
+- **Found** while smoke-testing multidoc and agentx-mvp for the next screen: on the same config,
+  `--workload chatbot`, `multidoc` and `agentx-mvp` gave byte-identical results. In inference-sim
+  v0.14.0 `cmd/root.go:946-969`, `--concurrency` synthesizes requests from the
+  `--prompt-tokens*`/`--output-tokens*`/`--prefix-tokens` flags (defaults 512/512, stdev 256, max
+  7000). A named preset is read only in rate mode. v0.10.0 has the same branch order. The probe is
+  closed-loop, so all ~120k cached runs on both stacks drew about 517 input / 512 output tokens per
+  request; the chatbot preset is 256/256, max 800/1024.
+- **What it changes:** S-mid v2, S-mid v3 and S-mn are `distribution` scenarios. Their findings (one
+  topology dominates, flat engine knobs) stand for that workload, but not for chatbot. The two
+  RFC #21 posts call them chatbot.
+- **Fix:** `config_forage/blis/workloads.py` resolves a workload to its token shape (the catalog preset,
+  or `distribution` = BLIS's defaults) and the runner passes it as flags, never `--workload`. A replay
+  workload or a malformed preset is refused. The shape enters the cache key, and PINS gains a
+  workload-contract entry, so cf-bench and cf-grid refuse to resume into old results. Spaces now say
+  `workload: distribution`, which reproduces the old runs exactly. Check: the S-mid v3 default
+  re-probed under `distribution` scores 67.015 tok/s/GPU at C* = 12, equal to the ground truth; under
+  real chatbot it scores 41.989 at C* = 7. A real-BLIS test now checks that chatbot and distribution
+  differ in input tokens per request.
+- **Old cache entries** keep their keys, which have no shape in them, so no new run can be served one.
+  They stay valid as `distribution` runs, but the new keys differ, so a rerun of the old spaces pays for
+  its runs again.
+
