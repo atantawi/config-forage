@@ -35,3 +35,15 @@ def test_probe_scores(runner):
     p = probe(runner, CONFIG, SCENARIO)
     assert p.score is not None and p.score < 0
     assert p.c_star >= 1 and p.runs >= 1
+
+
+def test_workload_reaches_blis(tmp_path):
+    """Closed-loop BLIS ignores --workload; the runner's shape flags must make the preset bite."""
+    env = BlisEnv.from_env()
+    env.scenarios_dir = tmp_path / "scenarios"
+    per_req = {}
+    for w in ("chatbot", "distribution"):
+        r = CachedRunner(env, Scenario(**{**SCENARIO.__dict__, "workload": w}), tmp_path / w).run(CONFIG, 8)
+        assert r["error"] is None, r.get("stderr_tail")
+        per_req[w] = r["metrics"]["total_input_tokens"] / r["metrics"]["injected_requests"]
+    assert 230 < per_req["chatbot"] < 280 and 480 < per_req["distribution"] < 560  # means 256 and 512

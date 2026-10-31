@@ -123,8 +123,8 @@ equal unique runs, never at equal configs.
 
 ## Results
 
-Two scenarios with full grids as ground truth (BLIS v0.14.0, 1,280 requests per point). Both use the
-chatbot workload with an ITL p99 ≤ 20 ms SLO:
+Two scenarios with full grids as ground truth (BLIS v0.14.0, 1,280 requests per point). Both use
+BLIS's 512/512-token `distribution` workload (not chatbot, see Caveats) with an ITL p99 ≤ 20 ms SLO:
 
 | | S-mid v3 | S-mn |
 |---|---|---|
@@ -167,7 +167,12 @@ Details:
 - Multi-node instances (tp·dp a multiple of 8 above one node, over an `ib-400g` fabric) are in the
   space. BLIS prices them, but the accuracy dashboard does not score multi-node points against
   hardware, so they are less validated than single-node ones.
-- Both ground truths are chatbot with an ITL-only SLO. Their flatness, the near-optimal default and
+- **Workload.** Closed-loop `blis run --concurrency` ignores `--workload` and draws from its
+  `--prompt-tokens*`/`--output-tokens*` defaults (512/512, max 7000). Every run before the
+  2026-10-30 fix passed `--workload chatbot` and drew from those defaults, so both ground truths are
+  that `distribution` workload, not chatbot (256/256, max 800/1024). The runner now passes a preset's
+  token shape as flags (`config_forage/blis/workloads.py`). Replay workloads (`agentx-mvp`) are refused.
+- Both ground truths are `distribution` with an ITL-only SLO. Their flatness, the near-optimal default and
   the dead diagnostic biaser (no rule fires) are specific to that setting. In S-mn the default
   topology was chosen before the screen, so its closeness to the optimum is not independent evidence.
 - The search uses one workload seed. `cf-analyze --heldout` checks the winners on three others.

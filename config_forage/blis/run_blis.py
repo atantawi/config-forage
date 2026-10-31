@@ -13,6 +13,8 @@
 # --model/--hardware/--tp/--dp/--enable-expert-parallel on the CLI. So a candidate's per-instance
 # topology is written into a generated Scenario+Deployment YAML; only workload, concurrency, instance
 # counts, scheduler/preemption policy, and seed stay on the CLI; the router config is a scenario block.
+# The workload goes on the CLI as its token-shape flags, never as --workload: closed-loop BLIS ignores
+# --workload (config_forage.blis.workloads).
 #
 # Every candidate key is classified to its scenario/CLI slot; UNKNOWN or NOT-YET-SUPPORTED keys are
 # REJECTED (recorded as an error row), never silently dropped -- else two candidates could differ in
@@ -23,6 +25,7 @@
 import argparse, hashlib, json, os, subprocess, sys, tempfile, time
 
 from config_forage import router as router_knobs
+from config_forage.blis import workloads
 
 COEFFICIENTS = ["cost-model-primitives", "cost-model-collectives", "cost-model-host-overheads",
                 "cost-model-attention", "cost-model-recurrent", "cost-model-memory"]
@@ -321,7 +324,7 @@ def resolve_defaults(blis, defaults):
     return beside if os.path.exists(beside) else None
 
 
-def build_cmd(blis, catalog, registry, scenarios_dir, scenario_name, workload, num_requests, seed,
+def build_cmd(blis, catalog, registry, scenarios_dir, scenario_name, shape, num_requests, seed,
               horizon, defaults, cli):
     # BLIS (v0.10.0 on) selects the kernel cost-model backend from the
     # scenario's `coefficients:` list (written into the generated scenario), not a CLI flag.
@@ -333,8 +336,7 @@ def build_cmd(blis, catalog, registry, scenarios_dir, scenario_name, workload, n
         cmd += ["--catalog", catalog]
     if resolve_defaults(blis, defaults):
         cmd += ["--defaults-filepath", resolve_defaults(blis, defaults)]
-    if workload:
-        cmd += ["--workload", workload]
+    cmd += workloads.cli_flags(shape)       # not --workload: closed-loop runs ignore it
     if num_requests is not None:
         cmd += ["--num-requests", str(num_requests)]
     if seed is not None:
@@ -358,7 +360,8 @@ def run_one(blis, catalog, registry, scenarios_dir, model, hardware, engine_vers
     rec = _record_shell(config, phase)
     try:
         parallel, engine, cli, router = classify_config(config)
-    except ConfigError as e:
+        shape = workloads.shape(workload or workloads.DISTRIBUTION, catalog)
+    except (ConfigError, ValueError) as e:
         # Same row SHAPE as a real run so neither sweep_pool's summary nor the report trips on a
         # missing key (every record has wall_s, deployment, metrics, ...). returncode=None marks it
         # "not run"; error carries the reason.
@@ -374,7 +377,7 @@ def run_one(blis, catalog, registry, scenarios_dir, model, hardware, engine_vers
     epp_file = write_epp(scenarios_dir, router["epp_config"]) if router else None
     scenario_name = write_scenario(scenarios_dir, model, hardware, engine_version, parallel, engine,
                                    num_instances, epp_file=epp_file)
-    cmd = build_cmd(blis, catalog, registry, scenarios_dir, scenario_name, workload,
+    cmd = build_cmd(blis, catalog, registry, scenarios_dir, scenario_name, shape,
                     num_requests, seed, horizon, defaults, cli)
     t0 = time.time()
     try:
@@ -393,6 +396,7 @@ def run_one(blis, catalog, registry, scenarios_dir, model, hardware, engine_vers
         "deployment": {"parallel": parallel, "engine": engine, "num_instances": num_instances,
                        "footprint_gpus_per_instance": fp, "gpus": fp * num_instances,
                        "scenario": scenario_name, "epp_file": epp_file},
+        "workload": {"name": workload or workloads.DISTRIBUTION, "shape": shape},
         "cmd": cmd, "returncode": rc, "wall_s": round(time.time() - t0, 3),
         "metrics": metrics, "metrics_all_instances": parse_all_instances(stdout) if rc == 0 else [],
         "error": error, "stdout_tail": stdout[-2000:], "stderr_tail": stderr[-2000:],
@@ -408,7 +412,7 @@ def add_common_args(p):
     p.add_argument("--model", required=True, help="catalog short-name, e.g. glm-5.3-flash")
     p.add_argument("--hardware", required=True, help="scenario hardware key, e.g. h100")
     p.add_argument("--engine-version", dest="engine_version", default="0.29.0")
-    p.add_argument("--workload")
+    p.add_argument("--workload", help="catalog preset name or 'distribution' (default)")
     p.add_argument("--num-requests", type=int, dest="num_requests")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--horizon", type=int)

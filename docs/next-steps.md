@@ -5,11 +5,15 @@ Update it when an item is done or re-prioritized.
 
 ## Scenarios that can separate the search methods (decided with the user, 2026-10-30)
 
-S-mid v3 (glm-5.3-flash, 16 H100) and S-mn (glm-5.3, 32 H100) are both **chatbot with an ITL-only
-SLO**. In both, one topology dominates, and almost every engine knob is flat (under 1%). The
+S-mid v3 (glm-5.3-flash, 16 H100) and S-mn (glm-5.3, 32 H100) are both **512/512 `distribution` with an
+ITL-only SLO** (labelled chatbot until 2026-10-30: closed-loop BLIS ignored `--workload`). In both, one topology dominates, and almost every engine knob is flat (under 1%). The
 default topology is at or near the optimum, and one-knob-at-a-time search finds it at once. Neither
 scenario can show a BSA advantage. Both keep their value as findings about the search space: S-mid
 v3's and S-mn's are both posted to blis-config-search discussion #21 (2026-10-30).
+
+**First: correct RFC #21.** Both posts there say chatbot; the workload was BLIS's 512/512 defaults.
+Post a correction (draft for the user's approval) and report the `--workload`/`--concurrency` behaviour
+to inference-sim. Check whether blis-config-search's runner, which ours was vendored from, has it too.
 
 The next scenarios should make more engine knobs matter:
 
@@ -19,7 +23,8 @@ The next scenarios should make more engine knobs matter:
 2. **A different workload:**
    - `multidoc`: long, shared-prefix prompts. Prefix caching, the prefix-affinity router, and KV
      memory should matter.
-   - `agentx-mvp`: agentic replay with long contexts. KV pressure brings in `max_num_seqs`,
+   - `agentx-mvp`: agentic replay with long contexts (a replay workload: the runner refuses it until
+     replay is supported). KV pressure brings in `max_num_seqs`,
      `gpu_memory_utilization`, `cache_dtype` and `max_model_len`.
 3. **kimi-k2.5 on H100.** Whether one node fits depends on the engine knobs (gmu 0.95, or fp8 KV
    with max_model_len ≤ 16k), so memory and topology interact.
