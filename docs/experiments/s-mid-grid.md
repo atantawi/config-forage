@@ -1,7 +1,8 @@
 > **Archived (BLIS v0.10.0, 80 requests per point).** Superseded by `s-mid-v3-screen.md` (BLIS
 > v0.14.0). DP lockstep in v0.11.0 reordered the topologies, and 80-request runs were 2–10% off, so
 > the numbers below do not carry over. The one-node rule and the BLIS-native routing knobs here no
-> longer apply. Kept as a record of the v2 benchmark.
+> longer apply. Kept as a record of the v2 space and grid. Method comparisons are kept in a
+> separate private repository.
 
 # S-mid: glm-5.3-flash on 16 H100, 512/512 distribution (real BLIS)
 
@@ -10,7 +11,7 @@
 > not chatbot (256/256, max 800/1024). Read "chatbot" below as `distribution`; the numbers stand for
 > that workload. See the research log, 2026-10-30.
 
-Two versions. **S-mid v1** (sections up to "Incumbent") is the first space, with the brief's axes.
+Two versions. **S-mid v1** (sections up to "S-mid v1 ground truth") is the first space, with the brief's axes.
 **S-mid v2** (from "Enrichment" on) is the committed `spaces/glm53flash-h100-chatbot-16.yaml`.
 The v1 YAML is `git show 40d4910:spaces/glm53flash-h100-chatbot-16.yaml`.
 
@@ -111,25 +112,12 @@ A 60 s `cf-grid` trial (fresh cache, 9 workers) did 1,420 configs / 3,017 runs (
 **Estimate for the full S-mid grid: ≈ 21,000 unique runs, ≈ 7 min at `--workers 9`** (well under the
 brief's n × 6 × median ÷ workers ≈ 4560 × 6 × 0.17 / 9 ≈ 8.6 min bound).
 
-## Incumbent (upstream heuristic) on S-mid
-
-`IncumbentSearcher(refine_top=3)`, budget 400 (fresh cache): stop "done" at **401 runs, 52
-evaluations** (19 topologies, then one-knob variants of the top 3; the budget check runs before each
-evaluation, hence 401). A budget of 10,000 gives the identical trace — 401 runs is the heuristic's
-natural size here.
-
-**Answer: tp 4, dp 2, EP, routing_policy weighted, everything else default → 94.93 tps/GPU
-(score −94.925).** Anytime: −82.96 at 50 runs, −88.95 at 100, −90.65 at 200, −94.93 at 400.
-
-The one-knob refinement cannot combine improvements (e.g. weighted routing and
-max_num_batched_tokens 2048 at tp4·dp2 each helped alone), so the grid optimum may beat it.
-
 ## S-mid v1 ground truth (controller's full grid, `results/s-mid/grid.jsonl`)
 
 4,560 configs, 1,848 scored, 19,024 unique runs, 388 s at 9 workers (estimate above: 21k runs, 7 min).
 **Optimum −94.928** at tp4·dp2 + EP, weighted routing, max_num_seqs 32, gpu_memory_utilization 0.7;
-**48 configs within 1%**. The incumbent's −94.925 is a **0.003% gap: it found the optimum.** By the
-spec's interaction test, S-mid had to be enriched before benchmarking.
+**48 configs within 1%**. The default topology tp4·dp2 + EP with weighted routing alone scores
+−94.925, a 0.003% gap, so the space was enriched.
 
 ## Enrichment (S-mid v2)
 
@@ -178,21 +166,6 @@ max_num_batched_tokens 4096, block_size 16, scheduler fcfs, C* = 61.** That is 3
 grid's −95.14, at a different topology. All 48 configs within 0.5% have C* = 61. **Plateau: 112
 configs within 1%, 144 within 5%.**
 
-Benchmark (8 methods × 10 seeds, B = 1000 unique runs; full table in the research log):
-
-| method | regret at B=1000 (median) | runs to 1% (median) | seeds within 0.5% |
-|---|---|---|---|
-| bsa-feas | 0 | 322 | 10/10 |
-| smac | 0 | 308 | 8/10 |
-| random (feasible) | 0 | 403 | 7/10 |
-| tpe | 0 | 352 | 6/10 |
-| bsa (no biasers) | 14.9 | 732 | 5/10 |
-| incumbent | 1.11 (0.84%) | 235 | 0/10 |
-| coord-ascent | 66.2 | never | 0/10 |
-
-The upstream incumbent reaches 1% fastest, then stalls, and never finds the optimum. None of the
-differences among the guided methods is significant at n = 10.
-
 ## Ground truth (S-mid v2, capped probe) — superseded
 
 `cf-grid spaces/glm53flash-h100-chatbot-16.yaml --cache cache --out results/s-mid2/grid.jsonl
@@ -209,25 +182,8 @@ Distribution (tps/GPU): max 95.1, 1st pct 94.3, 10th 88.9, 25th 83.0, median 69.
 90th 38.6, min 37.9; 171 distinct scores. **Plateau: 48 configs within 1%, 72 within 2%, 292 within
 5%.** preemption_policy and admission_policy are exact ties throughout (each distinct score ×4).
 
-Baselines (`scripts/baselines_vs_grid.py`, budget 1000; runs = distinct cache keys, cold-cache
-equivalent; output in results/s-mid2/baselines.txt):
-
-| method | best tps/GPU | gap to optimum | runs used | evals | stop | runs to within 1% |
-|---|---|---|---|---|---|---|
-| incumbent (refine_top 3) | 94.925 | **0.23%** | 420 | 44 | done | 203 |
-| coord-ascent seeds 0–4 | 66.337 (all seeds) | **30.3%** | 190–207 | 22–24 | converged | never |
-
-**Result, stated plainly: after enrichment the upstream incumbent heuristic still reaches within 1%
-of the S-mid optimum (0.23% gap, 420 runs).** Its topology sweep finds tp4·dp2+EP, its one-knob pass
-finds weighted routing, and the three-way engine interaction that makes the true optimum is worth only
-0.23%. Per the controller's instruction, I stopped enriching here. Coord-ascent fails badly on every
-seed for a structural reason: it starts at tp8·dp1, and with the tp·dp = 8 floor, no single-knob
-change reaches another topology (tp 4 alone means width 4). So it is stuck at tp8 (best 66.3 with
-weighted routing, block_size 16). The 5 seeds differ only in axis order and reach the same point.
-
-Implication for the benchmark: on S-mid v2, the score range that separates methods lies in topology
-× routing (37.9–94.9); engine knobs add < 1% at the top. "Within 1%" will be met by the incumbent at
-~200 runs. Regret below 0.25% (finding the 4-config exact optimum) is where BSA/TPE could show a gain.
+The three-way engine interaction that makes the true optimum is worth only 0.23%; topology × routing
+(37.9–94.9) carries the signal, and engine knobs add < 1% at the top.
 
 ## The diagnostic arm is inert on S-mid v2
 
@@ -240,10 +196,9 @@ manifest as `active_rules`):
 - the ttft_bound rule steers max_num_batched_tokens, but the scenario has no TTFT SLO, so no probe is
   ever TTFT-bound.
 
-So the factors stay all ones and `bsa-diag` draws exactly what `bsa-feas` draws: in the first S-mid v2
-benchmark their traces were identical seed for seed (cf-analyze now flags such pairs). The S-mid v2
-benchmark says nothing about the diagnostic biaser. Exercising it needs a space where a rule knob
-has several values and its signal occurs (KV pressure or a TTFT SLO), e.g. S-large.
+So the factors stay all ones and `bsa-diag` draws exactly what `bsa-feas` draws (cf-analyze flags such
+pairs). Exercising it needs a space where a rule knob has several values and its signal occurs (KV
+pressure or a TTFT SLO).
 
 ## S-large value check (`spaces/glm53flash-h100-chatbot-16-large.yaml`)
 

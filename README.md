@@ -137,13 +137,7 @@ BLIS's 512/512-token `distribution` workload (not chatbot, see Caveats) with an 
 | engine knobs that matter | `max_num_seqs`, only at dp > 1 | none |
 
 In both, one topology (the narrowest tp + EP that fits) carries almost all the signal. Router family
-and DP load balancing matter only at dp > 1. A 5-seed sanity benchmark at budget 300 shows that every
-method reaches within 1% of the optimum, so neither space can separate the search methods. Runs to
-reach 1% (S-mid v3 / S-mn):
-
-- coord-ascent, which starts at the default: 9 / 9
-- BSA + feasibility: 41 / 30
-- incumbent: 105 / 79
+and DP load balancing matter only at dp > 1.
 
 These findings about the shape of the space, for both scenarios, are posted to
 [blis-config-search discussion #21](https://github.com/inference-sim/blis-config-search/discussions/21).
@@ -151,17 +145,21 @@ These findings about the shape of the space, for both scenarios, are posted to
 **S-mid v2** (BLIS v0.10.0, 80 requests per point; archived) is not comparable. DP lockstep in v0.11.0
 flipped its topology ranking, and its short runs were 2–10% off.
 
-The case for BSA has not been made yet. It needs scenarios where several knobs matter and interact.
-The real chatbot screen has them (`docs/experiments/chatbot-screen.md`): the topology ranking
-reverses and `max_num_seqs` matters only at some topologies (S-chat, grid next). A second scenario is
-reserved, unpublished, as the clean-room test of LLM-designed sweeps. It also needs the large space (S-large). See `docs/next-steps.md`.
+The real chatbot preset changes this (`docs/experiments/chatbot-screen.md`, S-chat): the topology
+ranking reverses, the default is 56% below the optimum (96.2 at 1 × tp8·dp2 + EP), and `max_num_seqs`
+matters only at some topologies. S-chat pins `cudagraph_mode`; with it free (S-chat-large) the optimum
+is at least 108.9. A second real-workload scenario is reserved, unpublished, as the clean-room test of
+LLM-designed sweeps.
+
+Comparisons of search methods on these spaces (benchmarks, analyses, tuning) are kept in a separate
+private repository. This repo ships the harness that produces them (`cf-bench`, `cf-analyze`).
 
 Details:
 - `docs/research-log.md`: dated entries.
-- `docs/experiments/s-mid-v3-screen.md` and `docs/experiments/s-mn-screen.md`: screens, ground truth
-  and benchmark tables.
+- `docs/experiments/s-mid-v3-screen.md` and `docs/experiments/s-mn-screen.md`: screens and ground
+  truth.
 - `docs/experiments/s-mid-grid.md`: the archived v0.10.0 study.
-- `docs/experiments/chatbot-screen.md`: the real chatbot screen.
+- `docs/experiments/chatbot-screen.md`: the real chatbot screen, S-chat ground truth and `cudagraph_mode`.
 
 ## Caveats
 

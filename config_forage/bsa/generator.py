@@ -121,7 +121,7 @@ class CategoricalGenerator:
         Returns the indices of the elites, best first; their weights are in `last_weights`. Failed
         samples (score None) are never elites; if all failed, P is unchanged. A decision may leave
         an axis unlabelled (None): on that axis the elite frequencies use only the labelled elites,
-        with their weights renormalized, and with none the axis is unchanged.
+        with their weights renormalized; with none, or none of nonzero weight, the axis is unchanged.
         """
         ok = [i for i, s in enumerate(scores) if s is not None]
         if not ok:
@@ -132,7 +132,7 @@ class CategoricalGenerator:
         self.last_weights = (w / w.sum()).tolist()
         for m, p in enumerate(self.P):
             labelled = [(decisions[i][m], wi) for i, wi in zip(elites, w) if decisions[i][m] is not None]
-            if not labelled:
+            if not labelled or not sum(wi for _, wi in labelled) > 0:  # boltzmann weights can underflow to 0
                 continue
             opts, ws = zip(*labelled)
             freq = np.bincount(opts, weights=ws, minlength=len(p)) / sum(ws)
