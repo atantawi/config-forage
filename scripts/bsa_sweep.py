@@ -11,9 +11,10 @@ IQR of runs to within 1% (budget + 1 when never reached), the count of seeds tha
 the median regret at the budget (the best within `--budget` runs, not counting the last batch's
 overshoot, so settings with different batch sizes compare at the same budget).
 
-Each GRID must belong to its SPACE: its sidecar (GRID.meta.json, written by cf-grid) must exist and
-match the space's space_hash and the current BLIS pins, or the sweep refuses to start, since the
-optimum would be another space's."""
+Each GRID must be its SPACE's complete grid, or the sweep refuses to start, since its optimum would be
+another space's or a partial minimum: the sidecar (GRID.meta.json, written by cf-grid) must exist and
+match the space's space_hash and the current BLIS pins, and the rows must hold every feasible decision
+of the space (an interrupted cf-grid leaves a valid sidecar but too few rows)."""
 
 from __future__ import annotations
 
@@ -24,10 +25,10 @@ from pathlib import Path
 import numpy as np
 
 from config_forage.bench.analyze import load_grid, runs_to_within
-from config_forage.bench.grid import meta_path
+from config_forage.bench.grid import _key, meta_path
 from config_forage.bench.run import parse_seeds
 from config_forage.blis.runner import PINS, BlisEnv, CachedRunner, run_batch
-from config_forage.feasibility import FeasibilityBiaser
+from config_forage.feasibility import FeasibilityBiaser, enumerate_feasible
 from config_forage.probe import Objective
 from config_forage.search.bsa import BsaSearcher
 from config_forage.space import KnobSpace, load_space, space_hash
@@ -42,8 +43,9 @@ def _refuse(config, concurrency, seed):
                     "hold this space's grid for these seeds (run cf-grid first, or check --cache)")
 
 
-def check_grid(space: KnobSpace, grid: Path) -> None:
-    """Raise ValueError unless grid's sidecar exists and matches space's space_hash and the current pins."""
+def check_grid(space: KnobSpace, grid: Path) -> list[dict]:
+    """grid's rows; raise ValueError unless its sidecar exists and matches space's space_hash and the
+    current pins, and its rows cover exactly the space's feasible decisions."""
     mp = meta_path(grid)
     try:
         have = json.loads(mp.read_text())
@@ -55,6 +57,13 @@ def check_grid(space: KnobSpace, grid: Path) -> None:
     if bad:
         raise ValueError(f"{grid} is not this space's grid at these pins: "
                          + "; ".join(f"{k} {have.get(k)} there, {want[k]} here" for k in bad))
+    rows = load_grid(grid)
+    got, need = {_key(r["decision"]) for r in rows}, {_key(d) for d in enumerate_feasible(space)}
+    if got != need:
+        raise ValueError(f"{grid} is incomplete or holds other decisions: {len(need - got)} of the space's "
+                         f"{len(need)} feasible decisions missing, {len(got - need)} extra (resume cf-grid "
+                         "on it to finish)")
+    return rows
 
 
 def main() -> None:
@@ -68,11 +77,9 @@ def main() -> None:
     a = ap.parse_args()
     seeds, settings = parse_seeds(a.seeds), json.loads(a.settings)
     env = BlisEnv.from_env()
-    spaces = [(load_space(s), Path(g), s) for s, g in a.case]
-    for sp, grid, _ in spaces:  # every pairing is checked before any sweep starts
-        check_grid(sp, grid)
-    for sp, grid_path, space_path in spaces:
-        opt = min(r["score"] for r in load_grid(grid_path) if r["score"] is not None)
+    spaces = [(sp := load_space(s), check_grid(sp, Path(g)), s) for s, g in a.case]  # all checked first
+    for sp, rows, space_path in spaces:
+        opt = min(r["score"] for r in rows if r["score"] is not None)
         runner = CachedRunner(env, sp.scenario, a.cache, run_fn=_refuse)  # env: the shape enters the key
         for st in settings:
             kw = {k: v for k, v in st.items() if k != "feas"}
