@@ -9,7 +9,11 @@ shape, which is read from the catalog. Each setting is a dict of BsaSearcher key
 "feas": true for the feasibility biaser. Output: one JSON line per (case, setting) with the median and
 IQR of runs to within 1% (budget + 1 when never reached), the count of seeds that never reached it, and
 the median regret at the budget (the best within `--budget` runs, not counting the last batch's
-overshoot, so settings with different batch sizes compare at the same budget)."""
+overshoot, so settings with different batch sizes compare at the same budget).
+
+Each GRID must belong to its SPACE: its sidecar (GRID.meta.json, written by cf-grid) must exist and
+match the space's space_hash and the current BLIS pins, or the sweep refuses to start, since the
+optimum would be another space's."""
 
 from __future__ import annotations
 
@@ -20,12 +24,13 @@ from pathlib import Path
 import numpy as np
 
 from config_forage.bench.analyze import load_grid, runs_to_within
+from config_forage.bench.grid import meta_path
 from config_forage.bench.run import parse_seeds
-from config_forage.blis.runner import BlisEnv, CachedRunner, run_batch
+from config_forage.blis.runner import PINS, BlisEnv, CachedRunner, run_batch
 from config_forage.feasibility import FeasibilityBiaser
 from config_forage.probe import Objective
 from config_forage.search.bsa import BsaSearcher
-from config_forage.space import load_space
+from config_forage.space import KnobSpace, load_space, space_hash
 
 
 class CacheMiss(RuntimeError):
@@ -35,6 +40,21 @@ class CacheMiss(RuntimeError):
 def _refuse(config, concurrency, seed):
     raise CacheMiss(f"cache miss at concurrency {concurrency}, seed {seed} for {config}: the cache does not "
                     "hold this space's grid for these seeds (run cf-grid first, or check --cache)")
+
+
+def check_grid(space: KnobSpace, grid: Path) -> None:
+    """Raise ValueError unless grid's sidecar exists and matches space's space_hash and the current pins."""
+    mp = meta_path(grid)
+    try:
+        have = json.loads(mp.read_text())
+    except FileNotFoundError:
+        raise ValueError(f"{grid}: no sidecar {mp.name}, so its space and pins are unknown; "
+                         "use a grid written by cf-grid") from None
+    want = {"space_hash": space_hash(space), "pins": list(PINS)}
+    bad = [k for k in want if have.get(k) != want[k]]
+    if bad:
+        raise ValueError(f"{grid} is not this space's grid at these pins: "
+                         + "; ".join(f"{k} {have.get(k)} there, {want[k]} here" for k in bad))
 
 
 def main() -> None:
@@ -48,9 +68,11 @@ def main() -> None:
     a = ap.parse_args()
     seeds, settings = parse_seeds(a.seeds), json.loads(a.settings)
     env = BlisEnv.from_env()
-    for space_path, grid_path in a.case:
-        sp = load_space(space_path)
-        opt = min(r["score"] for r in load_grid(Path(grid_path)) if r["score"] is not None)
+    spaces = [(load_space(s), Path(g), s) for s, g in a.case]
+    for sp, grid, _ in spaces:  # every pairing is checked before any sweep starts
+        check_grid(sp, grid)
+    for sp, grid_path, space_path in spaces:
+        opt = min(r["score"] for r in load_grid(grid_path) if r["score"] is not None)
         runner = CachedRunner(env, sp.scenario, a.cache, run_fn=_refuse)  # env: the shape enters the key
         for st in settings:
             kw = {k: v for k, v in st.items() if k != "feas"}
