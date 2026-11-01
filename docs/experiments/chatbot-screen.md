@@ -54,3 +54,38 @@ topology × `max_num_seqs`, with EP and router as second-order axes. Pinned: gmu
 scheduler, preemption, queue and prefix weights. `cache_dtype` (3%) is borderline and kept. The screen
 varies one knob at a time around six bases, so the grid is still the ground truth on pairwise
 interactions.
+
+## Ground truth (full grid, 2026-10-31)
+
+`uv run cf-grid spaces/glm53flash-h100-chatbot-real-16.yaml --cache cache --out results/s-chat/grid.jsonl --workers 15`:
+7,680 configs, all scored, 40,310 unique BLIS runs, 3 h 25 min on the M5 Max.
+
+- **Optimum: 96.2 tok/s per GPU at 1 × tp8·dp2 + EP** (internal DP LB, `max_num_seqs` 256, load-only
+  router, kv weight 1). All 96 configs within 1% are that topology.
+- **The default (2 × tp8 + EP) is 56% below it** at 42.0. In S-mid v3 the default was 0.11% off.
+
+| topology | best tok/s/GPU | vs optimum |
+|---|---|---|
+| 1 × tp8·dp2 + EP | 96.2 | — |
+| 1 × tp16 + EP | 77.6 | −19% |
+| 2 × tp8 + EP | 42.2 | −56% |
+| 2 × tp8 | 34.8 | −64% |
+| 2 × tp4·dp2 + EP | 32.8 | −66% |
+| 2 × tp4·dp2 | 27.7 | −71% |
+| 1 × tp4·dp4 + EP | 26.0 | −73% |
+| 2 × tp2·dp4 + EP | 25.5 | −74% |
+| every other topology | ≤ 23.1 | −76% or worse |
+
+Best score per `max_num_seqs` value:
+
+| topology | 32 | 64 | 128 | 256 | 512 |
+|---|---|---|---|---|---|
+| 1 × tp8·dp2 + EP | 15.9 | 15.9 | 29.5 | 96.2 | 96.2 |
+| 1 × tp16 + EP | 20.4 | 20.4 | 36.4 | 77.6 | 77.6 |
+| 2 × tp8 + EP | 41.9 | 41.9 | 42.0 | 42.2 | 42.2 |
+| 2 × tp8 | 34.6 | 34.6 | 34.7 | 34.8 | 34.8 |
+
+So the two best topologies are good only with `max_num_seqs` ≥ 256: below it they fall to or under the
+2 × tp8 shapes. A search that samples a low `max_num_seqs` with them misjudges them as weak.
+Coordinate ascent from the default keeps `max_num_seqs` at 256, so it can still find the optimum with
+one `dp` step. That makes it the baseline to beat.

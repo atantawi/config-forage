@@ -399,3 +399,15 @@ added in the PR #3 review, show the prefix-cache weight flat too (0%).
 - **Decided with the user:** S-chat (7,680 configs) is the main BSA benchmark; its grid is running. A
   second real-workload scenario, screened alongside, is the clean-room test of LLM-designed sweeps.
   Because this repo is public, its space and findings are kept out of it until that test has run.
+
+## 2026-10-31 — S-chat ground truth
+
+- **Grid** (`spaces/glm53flash-h100-chatbot-real-16.yaml`, 15 workers): 7,680 configs, all scored,
+  40,310 BLIS runs, 3 h 25 min. An earlier start from the space before its PR #8 fix (it still said
+  `distribution`) was stopped at 150 configs and discarded.
+- **Optimum 96.2 tok/s/GPU at 1 × tp8·dp2 + EP**; 96 configs within 1%, all that topology. The default
+  (2 × tp8 + EP) is 56% below it. Next topologies: 1 × tp16 + EP −19%, 2 × tp8 + EP −56%.
+- **`max_num_seqs` × topology confirmed:** below 256 the two best topologies fall to 15.9–36.4, under
+  the 2 × tp8 shapes; at 2 × tp8 it is flat (41.9–42.2). Tables: `docs/experiments/chatbot-screen.md`.
+- **The reserved clean-room scenario's grid** also finished (kept locally, unpublished).
+

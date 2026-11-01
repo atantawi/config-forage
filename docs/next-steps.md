@@ -24,10 +24,12 @@ S-mid v3 and S-mn lacked:
 - **S-chat** (`spaces/glm53flash-h100-chatbot-real-16.yaml`, 7,680 configs): chatbot, ITL p99 ≤ 20 ms.
   Topology ranking reversed from S-mid v3 (1 × tp8·dp2 + EP 96.2 vs 2 × tp8 + EP 42.0 tok/s/GPU), and
   `max_num_seqs` is worth 74–84% at the one-instance shapes but under 1% at the others. **The main BSA
-  benchmark.** Grid running (2026-10-31).
+  benchmark.** Ground truth done (2026-10-31): optimum 96.2 at 1 × tp8·dp2 + EP, the default 56% below
+  it. Next: the benchmark, every method × 10 seeds to a fixed budget.
 - **A second real-workload scenario** was screened alongside it and is reserved as **the clean-room
   scenario for the LLM-designed-sweep arm** (decided with the user, 2026-10-31). This repo is public, so
-  its space, screen and grid stay out of the repo until that test has run.
+  its space, screen and grid stay out of the repo until that test has run. Its grid is done (2026-10-31)
+  and kept locally.
 - Dropped: summarization. Still open: agentx-mvp (needs replay support) and kimi-k2.5 on H100.
 
 ## LLM-designed sweeps as a search arm (decided with the user, 2026-10-30)

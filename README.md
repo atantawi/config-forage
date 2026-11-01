@@ -153,7 +153,7 @@ flipped its topology ranking, and its short runs were 2–10% off.
 
 The case for BSA has not been made yet. It needs scenarios where several knobs matter and interact.
 The real chatbot screen has them (`docs/experiments/chatbot-screen.md`): the topology ranking
-reverses and `max_num_seqs` matters only at some topologies (S-chat, grid next). A second scenario is
+reverses and `max_num_seqs` matters only at some topologies (S-chat: the full grid puts the optimum at 1 × tp8·dp2 + EP, with the default 56% below it). A second scenario is
 reserved, unpublished, as the clean-room test of LLM-designed sweeps. It also needs the large space (S-large). See `docs/next-steps.md`.
 
 Details:
