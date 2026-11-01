@@ -121,5 +121,7 @@ external DP LB). S-chat is not regridded.
 
 ## S-chat-large
 
-`spaces/glm53flash-h100-chatbot-real-16-large.yaml`: S-large v3's knobs on chatbot, 9,953,280,000
-combinations, with S-chat a sub-space of it (same defaults; checked by `tests/test_spaces.py`). No grid.
+`spaces/glm53flash-h100-chatbot-real-16-large.yaml`: S-large v3's knobs on chatbot, 707,788,800 feasible
+configs (the same count as S-large v3; the raw product of the axes, 9,953,280,000, also counts infeasible
+topologies and labels on gated-off knobs). S-chat is a sub-space of it with the same defaults (checked by
+`tests/test_spaces.py`). No grid.

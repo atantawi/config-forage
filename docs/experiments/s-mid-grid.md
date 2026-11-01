@@ -196,9 +196,9 @@ manifest as `active_rules`):
 - the ttft_bound rule steers max_num_batched_tokens, but the scenario has no TTFT SLO, so no probe is
   ever TTFT-bound.
 
-So the factors stay all ones and `bsa-diag` draws exactly what `bsa-feas` draws (cf-analyze flags such
-pairs). Exercising it needs a space where a rule knob has several values and its signal occurs (KV
-pressure or a TTFT SLO).
+So every factor is 1 and the biaser has no effect on this space (cf-analyze flags an arm whose traces
+equal another's). Exercising it needs a space where a rule knob has several values and its signal occurs
+(KV pressure or a TTFT SLO).
 
 ## S-large value check (`spaces/glm53flash-h100-chatbot-16-large.yaml`)
 

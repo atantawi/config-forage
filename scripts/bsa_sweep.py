@@ -3,11 +3,13 @@
     uv run python scripts/bsa_sweep.py --cache cache/ --seeds 0-9 --budget 1000 \
         --case SPACE GRID [--case SPACE GRID ...] --settings '[{"alpha": 0.7}, {"alpha": 0.3, "batch": 32}]'
 
-Every probe must be a cache hit from the grid, so a sweep makes no new BLIS runs (it reports any it
-made). Each setting is a dict of BsaSearcher keyword arguments (alpha, rho, eps, batch, scheme) plus
+Every probe must be a cache hit from the grid: a cache miss raises CacheMiss and the sweep stops, so it
+never launches BLIS. BLIS_CATALOG etc. must still be set: the cache key includes the workload's token
+shape, which is read from the catalog. Each setting is a dict of BsaSearcher keyword arguments (alpha, rho, eps, batch, scheme) plus
 "feas": true for the feasibility biaser. Output: one JSON line per (case, setting) with the median and
 IQR of runs to within 1% (budget + 1 when never reached), the count of seeds that never reached it, and
-the median final regret."""
+the median regret at the budget (the best within `--budget` runs, not counting the last batch's
+overshoot, so settings with different batch sizes compare at the same budget)."""
 
 from __future__ import annotations
 
@@ -26,6 +28,15 @@ from config_forage.search.bsa import BsaSearcher
 from config_forage.space import load_space
 
 
+class CacheMiss(RuntimeError):
+    """A probe the grid did not cache: the sweep would have to run BLIS."""
+
+
+def _refuse(config, concurrency, seed):
+    raise CacheMiss(f"cache miss at concurrency {concurrency}, seed {seed} for {config}: the cache does not "
+                    "hold this space's grid for these seeds (run cf-grid first, or check --cache)")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--case", nargs=2, action="append", metavar=("SPACE", "GRID"), required=True)
@@ -40,7 +51,7 @@ def main() -> None:
     for space_path, grid_path in a.case:
         sp = load_space(space_path)
         opt = min(r["score"] for r in load_grid(Path(grid_path)) if r["score"] is not None)
-        runner = CachedRunner(env, sp.scenario, a.cache)
+        runner = CachedRunner(env, sp.scenario, a.cache, run_fn=_refuse)  # env: the shape enters the key
         for st in settings:
             kw = {k: v for k, v in st.items() if k != "feas"}
             biasers = [FeasibilityBiaser(sp)] if st.get("feas") else []
@@ -48,10 +59,9 @@ def main() -> None:
             def one(seed, kw=kw, biasers=biasers, sp=sp, runner=runner, opt=opt):
                 t = BsaSearcher(sp, biasers, workers=1, **kw).search(Objective(sp, runner), a.budget, seed)
                 r = runs_to_within(t, opt, a.budget)
-                best = t.points[-1].best_score if t.points else None
+                best = t.value_at(a.budget)
                 return (a.budget + 1 if r is None else r), r is None, (None if best is None else best - opt)
 
-            before = runner.unique_runs
             res = run_batch(one, seeds, a.jobs)
             runs = np.array([r for r, _, _ in res])
             regret = [g for _, _, g in res if g is not None]
@@ -59,8 +69,8 @@ def main() -> None:
                               "runs_to_1pct_median": float(np.median(runs)),
                               "iqr": [float(np.percentile(runs, 25)), float(np.percentile(runs, 75))],
                               "censored": sum(c for _, c, _ in res), "seeds": len(seeds),
-                              "final_regret_median": float(np.median(regret)) if regret else None,
-                              "new_blis_runs": runner.unique_runs - before}), flush=True)
+                              "regret_at_budget_median": float(np.median(regret)) if regret else None}),
+                  flush=True)
 
 
 if __name__ == "__main__":

@@ -125,3 +125,4 @@ def test_s_chat_large_is_a_superset_of_s_chat():
     for k in chat.knobs:
         kb = big.knobs[big.names.index(k.name)]
         assert set(k.values) <= set(kb.values) and kb.default == k.default, k.name
+    assert count_feasible(big) == 707_788_800  # docs/experiments/chatbot-screen.md quotes this
