@@ -410,4 +410,14 @@ added in the PR #3 review, show the prefix-cache weight flat too (0%).
 - **`max_num_seqs` × topology confirmed:** below 256 the two best topologies fall to 15.9–36.4, under
   the 2 × tp8 shapes; at 2 × tp8 it is flat (41.9–42.2). Tables: `docs/experiments/chatbot-screen.md`.
 - **The reserved clean-room scenario's grid** also finished (kept locally, unpublished).
+- **Benchmark** (budget 1000, 10 seeds, 8 methods; all cache hits, 1.7 min). Runs to within 1%,
+  median: incumbent 91 (deterministic), **TPE 129** (10/10 seeds), random 254 (7/10), bsa-feas 507,
+  smac 554, bsa 573 (7/10), bsa-diag 764, coord-ascent 1001 (3/10). TPE beats BSA (p = 0.002); BSA is
+  behind random but not significantly (p = 0.38). The trap is 1 × tp16 + EP (77.6): coord-ascent ends
+  there on 7 of 10 seeds, and BSA's distribution concentrates on it on its censored seeds. The biasers
+  do not help (p ≥ 0.56). Tables: `docs/experiments/chatbot-screen.md`.
+- **The earlier claim in this PR's first commit was wrong:** coordinate ascent does not find the
+  optimum with one `dp` step from the default; it moves `tp` first and gets stuck at tp16.
+- The cf-bench log shows numpy "Mean of empty slice" warnings. They come from inside SMAC's local
+  search (`smac/acquisition/maximizer/local_search.py`), not from config-forage; every arm finished.
 

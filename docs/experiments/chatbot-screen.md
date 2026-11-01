@@ -87,5 +87,31 @@ Best score per `max_num_seqs` value:
 
 So the two best topologies are good only with `max_num_seqs` ≥ 256: below it they fall to or under the
 2 × tp8 shapes. A search that samples a low `max_num_seqs` with them misjudges them as weak.
-Coordinate ascent from the default keeps `max_num_seqs` at 256, so it can still find the optimum with
-one `dp` step. That makes it the baseline to beat.
+
+## Benchmark (budget 1000, 10 seeds)
+
+`uv run cf-bench spaces/glm53flash-h100-chatbot-real-16.yaml --cache cache --out results/s-chat/runs --budget 1000 --seeds 0-9 --jobs 4 --workers 4 --methods bsa,bsa-feas,bsa-diag,random,tpe,smac,incumbent,coord-ascent`,
+then `cf-analyze` against the grid. 1.7 min: every probe was a cache hit from the grid.
+
+| method | regret at B=100 | B=200 | B=1000 | runs to within 1% | seeds within 0.5% at B=1000 |
+|---|---|---|---|---|---|
+| tpe | 18.7 [0.13, 18.7] | 0.11 [0, 18.7] | 0 [0, 0] | **129** [76, 256] | 100% |
+| incumbent (deterministic) | 0 | 0 | 0 | 91 | 100% |
+| random | 18.7 [4.67, 18.7] | 6.5 [0.03, 16.6] | 0 [0, 2.17] | 254 [104, 876] (3 censored) | 70% |
+| smac | 36.5 [18.7, 59.7] | 18.7 [12.6, 18.7] | 0 [0, 0] | 554 [334, 860] (2 censored) | 80% |
+| bsa | 18.7 [18.7, 65.1] | 18.7 [18.7, 61.2] | 0 [0, 14] | 573 [414, 925] (3 censored) | 70% |
+| bsa-feas | 18.7 [18.7, 18.7] | 18.7 [4.67, 18.7] | 0.09 [0, 14.7] | 507 [173, 1001] (4 censored) | 60% |
+| bsa-diag | 18.7 [18.7, 45.2] | 18.7 [4.67, 45.2] | 1.43 [0, 18.7] | 764 [208, 1001] (5 censored) | 50% |
+| coord-ascent | 18.7 [4.67, 18.7] | 18.7 [4.67, 18.7] | 18.7 [4.67, 18.7] | 1001 [285, 1001] (7 censored) | 30% |
+
+Regret in tok/s per GPU, median [IQR] over seeds. A censored seed never got within 1%.
+
+- **TPE is the clear winner.** It reaches within 1% in a median 129 runs on every seed. BSA needs 573
+  (p = 0.002, paired Wilcoxon) and misses on 3 of 10 seeds.
+- **The incumbent reaches the optimum in 91 runs.** Its sequence happens to try 1 × tp8·dp2 early.
+- **The trap is 1 × tp16 + EP (77.6, regret 18.7).** From there no single change leads to the optimum:
+  raising dp makes the width 32, over the budget. Coordinate ascent moves to tp16 first and stays there
+  on 7 of 10 seeds. BSA's sampling distribution concentrates on tp16 the same way on the censored seeds.
+- **BSA's biasers do not help here.** bsa-feas and bsa-diag are no better than plain bsa (p ≥ 0.56).
+- **BSA is behind random search** on runs to 1% (573 vs 254 median), though not significantly (p = 0.38).
+- So S-chat has interacting knobs, but its hard part is one topology trap, and TPE handles that best.
