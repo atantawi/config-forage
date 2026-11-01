@@ -45,7 +45,7 @@ def main() -> None:
             kw = {k: v for k, v in st.items() if k != "feas"}
             biasers = [FeasibilityBiaser(sp)] if st.get("feas") else []
 
-            def one(seed, kw=kw, biasers=biasers):
+            def one(seed, kw=kw, biasers=biasers, sp=sp, runner=runner, opt=opt):
                 t = BsaSearcher(sp, biasers, workers=1, **kw).search(Objective(sp, runner), a.budget, seed)
                 r = runs_to_within(t, opt, a.budget)
                 best = t.points[-1].best_score if t.points else None
