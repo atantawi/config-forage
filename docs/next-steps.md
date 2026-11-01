@@ -26,7 +26,9 @@ S-mid v3 and S-mn lacked:
   `max_num_seqs` is worth 74–84% at the one-instance shapes but under 1% at the others. **The main BSA
   benchmark.** Ground truth done (2026-10-31): optimum 96.2 at 1 × tp8·dp2 + EP, the default 56% below
   it. **Benchmark done: TPE wins** (129 runs to within 1%, all seeds); BSA needs 573 and misses 3 of 10
-  seeds, behind random (254). The trap is 1 × tp16 + EP, 19% below the optimum with no one-step way out.
+  seeds, behind random (254). The trap is 1 × tp16 + EP, 19% below the optimum with no one-step way out. On S-chat-large (every knob free, 2026-11-01) TPE
+  again leads (5/10 seeds within 1% of the best found, BSA 3/10). S-chat's numbers are for a space with
+  `cudagraph_mode` pinned to PIECEWISE; FULL is worth +13% (`docs/experiments/s-chat-large.md`).
 - **A second real-workload scenario** was screened alongside it and is reserved as **the clean-room
   scenario for the LLM-designed-sweep arm** (decided with the user, 2026-10-31). This repo is public, so
   its space, screen and grid stay out of the repo until that test has run. Its grid is done (2026-10-31)

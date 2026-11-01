@@ -57,6 +57,10 @@ interactions.
 
 ## Ground truth (full grid, 2026-10-31)
 
+> **Caveat (2026-11-01).** This space pins `cudagraph_mode` to PIECEWISE. With it free, the optimum is
+> at least 108.9 (FULL), 13% higher; see `docs/experiments/s-chat-large.md`. The tables below are for
+> the pinned space.
+
 `uv run cf-grid spaces/glm53flash-h100-chatbot-real-16.yaml --cache cache --out results/s-chat/grid.jsonl --workers 15`:
 7,680 configs, all scored, 40,310 unique BLIS runs, 3 h 25 min on the M5 Max.
 

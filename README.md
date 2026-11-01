@@ -162,6 +162,7 @@ Details:
   and benchmark tables.
 - `docs/experiments/s-mid-grid.md`: the archived v0.10.0 study.
 - `docs/experiments/chatbot-screen.md`: the real chatbot screen.
+- `docs/experiments/s-chat-large.md`: every knob free on chatbot; `cudagraph_mode` (pinned in S-chat) is worth +13%.
 
 ## Caveats
 

@@ -421,3 +421,15 @@ added in the PR #3 review, show the prefix-cache weight flat too (0%).
 - The cf-bench log shows numpy "Mean of empty slice" warnings. They come from inside SMAC's local
   search (`smac/acquisition/maximizer/local_search.py`), not from config-forage; every arm finished.
 
+## 2026-11-01 — S-chat-large benchmark; `cudagraph_mode` was pinned out of S-chat
+
+- **S-chat-large** (S-large v3's knobs on chatbot, ~10^10 configs, no grid): 7 methods × 10 seeds to
+  1000 runs, 54,910 BLIS runs, 1 h 17 min. Best found 108.9. Seeds within 1% of it: TPE 5/10, BSA
+  3/10, bsa-feas, smac and coord-ascent 1/10, random and the incumbent 0/10. TPE vs BSA not significant
+  (p = 0.21). `docs/experiments/s-chat-large.md`.
+- **S-chat's optimum was understated.** S-chat pins `cudagraph_mode` to PIECEWISE; FULL is +10–14% at the
+  one-instance shapes, and FULL_DECODE_ONLY is a second topology-dependent trap (−72% to −83% there).
+  A 9-base screen confirms it. `max_model_len` is flat.
+- **Decided with the user:** no regrid. S-chat's docs carry a caveat that its tables are for the pinned
+  space. The pin is not expected to change the comparison of methods.
+
