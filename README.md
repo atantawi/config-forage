@@ -162,6 +162,7 @@ Details:
   and benchmark tables.
 - `docs/experiments/s-mid-grid.md`: the archived v0.10.0 study.
 - `docs/experiments/chatbot-screen.md`: the real chatbot screen.
+- `docs/experiments/bsa-tuning.md`: BSA generator settings on S-chat (no setting beats TPE).
 
 ## Caveats
 

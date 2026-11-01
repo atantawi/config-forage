@@ -399,3 +399,14 @@ added in the PR #3 review, show the prefix-cache weight flat too (0%).
 - **Decided with the user:** S-chat (7,680 configs) is the main BSA benchmark; its grid is running. A
   second real-workload scenario, screened alongside, is the clean-room test of LLM-designed sweeps.
   Because this repo is public, its space and findings are kept out of it until that test has run.
+
+## 2026-11-01 — BSA generator tuning does not close the gap to TPE (S-chat)
+
+- 48 generator settings × seeds 0–19 on S-chat, then the top 5 rechecked on held-out seeds 20–39
+  next to TPE, random and coordinate ascent (`docs/experiments/bsa-tuning.md`). Held-out runs to
+  within 1%, median: TPE 240, best BSA 276, default BSA 348, random 556. No setting beats TPE, and
+  the setting that led on seeds 0–19 (median 226) fell to 354 on fresh seeds.
+- **Bug:** boltzmann weights that underflow to 0 made a gated axis NaN (0/0). Fixed in
+  `CategoricalGenerator.update`, with a regression test. The hard scheme was not affected.
+- Next: S-large (every knob free, no grid), the case BSA is meant for.
+
