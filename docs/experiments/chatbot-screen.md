@@ -54,3 +54,74 @@ topology × `max_num_seqs`, with EP and router as second-order axes. Pinned: gmu
 scheduler, preemption, queue and prefix weights. `cache_dtype` (3%) is borderline and kept. The screen
 varies one knob at a time around six bases, so the grid is still the ground truth on pairwise
 interactions.
+
+## Ground truth (full grid, 2026-10-31)
+
+> **Caveat (2026-11-01).** This space pins `cudagraph_mode` to PIECEWISE. With it free, the optimum is
+> at least 108.9 (FULL), 13% higher; see "`cudagraph_mode` on chatbot" below. The tables below are for
+> the pinned space.
+
+`uv run cf-grid spaces/glm53flash-h100-chatbot-real-16.yaml --cache cache --out results/s-chat/grid.jsonl --workers 15`:
+7,680 configs, all scored, 40,310 unique BLIS runs, 3 h 25 min on the M5 Max.
+
+- **Optimum: 96.2 tok/s per GPU at 1 × tp8·dp2 + EP** (internal DP LB, `max_num_seqs` 256, load-only
+  router, kv weight 1). All 96 configs within 1% are that topology.
+- **The default (2 × tp8 + EP) is 56% below it** at 42.0. In S-mid v3 the default was 0.11% off.
+
+| topology | best tok/s/GPU | vs optimum |
+|---|---|---|
+| 1 × tp8·dp2 + EP | 96.2 | — |
+| 1 × tp16 + EP | 77.6 | −19% |
+| 2 × tp8 + EP | 42.2 | −56% |
+| 2 × tp8 | 34.8 | −64% |
+| 2 × tp4·dp2 + EP | 32.8 | −66% |
+| 2 × tp4·dp2 | 27.7 | −71% |
+| 1 × tp4·dp4 + EP | 26.0 | −73% |
+| 2 × tp2·dp4 + EP | 25.5 | −74% |
+| every other topology | ≤ 23.1 | −76% or worse |
+
+Best score per `max_num_seqs` value:
+
+| topology | 32 | 64 | 128 | 256 | 512 |
+|---|---|---|---|---|---|
+| 1 × tp8·dp2 + EP | 15.9 | 15.9 | 29.5 | 96.2 | 96.2 |
+| 1 × tp16 + EP | 20.4 | 20.4 | 36.4 | 77.6 | 77.6 |
+| 2 × tp8 + EP | 41.9 | 41.9 | 42.0 | 42.2 | 42.2 |
+| 2 × tp8 | 34.6 | 34.6 | 34.7 | 34.8 | 34.8 |
+
+So the two best topologies are good only with `max_num_seqs` ≥ 256: below it they fall to or under the
+2 × tp8 shapes. A search that samples a low `max_num_seqs` with them misjudges them as weak.
+
+## `cudagraph_mode` on chatbot
+
+S-chat pins `cudagraph_mode` to PIECEWISE, the runner's default. The S-mid v3 screen had not screened it (its
+"values accepted" check only ran each value once). A screen with `cudagraph_mode` and
+`max_model_len` added (`spaces/screen/glm53flash-h100-chatbot-16-real-screen.yaml`, 9 bases, 323
+probes, 3 min):
+
+| base | NONE | PIECEWISE | FULL | FULL_DECODE_ONLY | FULL_AND_PIECEWISE |
+|---|---|---|---|---|---|
+| 1 × tp8·dp2 + EP | 8.6 | 96.2 | **105.8** | 16.7 | 99.2 |
+| same, inflight router + external LB | 8.5 | 96.1 | **108.9** | 16.3 | 99.2 |
+| 1 × tp16 + EP | 9.9 | 77.6 | **88.3** | 21.9 | 80.8 |
+| 2 × tp8 + EP | 22.4 | 42.0 | 44.4 | 44.1 | **44.5** |
+| 2 × tp4·dp2 + EP | 15.4 | 26.4 | **27.6** | 27.4 | 27.5 |
+| 2 × tp2·dp4 + EP | 9.9 | 20.4 | **21.1** | 20.9 | **21.1** |
+
+- FULL is best or within 0.3% of best at every base, worth +10–14% at the one-instance shapes.
+- FULL_DECODE_ONLY is a second topology-dependent trap, like low `max_num_seqs`: near-best at the
+  two-instance shapes, −72% to −83% at the one-instance ones (C* falls to 3).
+- NONE costs 47–92% everywhere. `max_model_len` is flat (0.0%) at every base.
+- The other knobs' spreads are as in the earlier screen, with FULL as well as PIECEWISE.
+
+**Caveat on S-chat (decided with the user, 2026-11-01).** S-chat's grid ran with `cudagraph_mode`
+pinned to PIECEWISE, so 96.2 is the optimum of that pinned space, not of the knob space; with
+`cudagraph_mode` free it is at least 108.9 (FULL at 1 × tp8·dp2 + EP with the inflight-load router and
+external DP LB). S-chat is not regridded.
+
+## S-chat-large
+
+`spaces/glm53flash-h100-chatbot-real-16-large.yaml`: S-large v3's knobs on chatbot, 707,788,800 feasible
+configs (the same count as S-large v3; the raw product of the axes, 9,953,280,000, also counts infeasible
+topologies and labels on gated-off knobs). S-chat is a sub-space of it with the same defaults (checked by
+`tests/test_spaces.py`). No grid.

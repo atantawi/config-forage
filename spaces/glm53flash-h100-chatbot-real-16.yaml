@@ -2,6 +2,7 @@
 # max 800/1024), ITL p99 <= 20 ms, headroom 0.8. S-mid v3's knobs on the workload it was meant to have.
 # The screen (docs/experiments/chatbot-screen.md) reverses S-mid v3's topology ranking and
 # makes max_num_seqs depend on topology; axes under 1% at every base are pinned, cache_dtype (3%) is kept.
+# cudagraph_mode is pinned to PIECEWISE (the runner default); FULL is worth +13% (docs/experiments/chatbot-screen.md).
 scenario:
   model: glm-5.3-flash
   hardware: h100

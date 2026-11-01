@@ -102,6 +102,7 @@ WORKLOADS = {
     "glm53-h100-chatbot-32-screen.yaml": "distribution",
     "glm53flash-h100-chatbot-real-16.yaml": "chatbot",
     "glm53flash-h100-chatbot-16-real-screen.yaml": "chatbot",
+    "glm53flash-h100-chatbot-real-16-large.yaml": "chatbot",
 }
 
 
@@ -116,3 +117,12 @@ def test_s_chat_is_s_mid_v3_on_chatbot():
     from dataclasses import replace
     assert chat.scenario == replace(mid.scenario, workload="chatbot")
     assert sum(1 for _ in enumerate_feasible(chat)) == count_feasible(chat) == 7680
+
+
+def test_s_chat_large_is_a_superset_of_s_chat():
+    chat, big = load_space(SPACES / "glm53flash-h100-chatbot-real-16.yaml"), load_space(SPACES / "glm53flash-h100-chatbot-real-16-large.yaml")
+    assert big.scenario == chat.scenario
+    for k in chat.knobs:
+        kb = big.knobs[big.names.index(k.name)]
+        assert set(k.values) <= set(kb.values) and kb.default == k.default, k.name
+    assert count_feasible(big) == 707_788_800  # docs/experiments/chatbot-screen.md quotes this

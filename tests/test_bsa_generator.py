@@ -363,3 +363,18 @@ def test_default_eps():
     assert default_eps(SPACE6) == 0.02  # 0.5 / 4 > 0.02
     assert default_eps(_space(9, 2)) == 0.02  # S-large's widest axis
     assert default_eps(_space(100, 3)) == 0.005 and default_eps(_space(100), eps=0.001) == 0.001
+
+
+def test_axis_whose_labelled_elites_all_weigh_zero_is_unchanged():
+    """A gated axis labelled only by elites whose boltzmann weight underflows to 0 must not become
+    0/0 = NaN. It did on S-chat (seed 4): the scores below, where the elites at -41.99 are hundreds of
+    taus behind the best and weigh exactly 0, and only one of them labelled a gated axis."""
+    g = CategoricalGenerator(_space(2, 3), scheme="boltzmann", c=1.0, min_ess=2)
+    scores = [-77.58] * 2 + [-77.51] * 5 + [-41.99] * 3 + [-30.0] * 6
+    ds = [(0, None)] * 7 + [(1, 2)] + [(1, None)] * 8
+    _, w = g._elites(list(range(16)), np.array(scores))
+    assert w[7] == 0.0  # the precondition: the one elite labelling axis 1 weighs exactly 0
+    before = g.P[1].copy()
+    g.update(ds, scores)
+    assert all(np.all(np.isfinite(p)) for p in g.P)
+    assert np.allclose(g.P[1], before)
