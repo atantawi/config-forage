@@ -110,6 +110,8 @@ class CachedRunner:
             config = router.to_blis(config)
         except ValueError:
             pass
+        # measured no-op engine values (e.g. eplb with enable_eplb false) share the default's run
+        config = run_blis.canonical_config(config, self.scenario.engine_version)
         key = cache_key(config, concurrency, seed, self.scenario, self.shape)
         with self._lock:
             klock = self._key_locks.setdefault(key, threading.Lock())
