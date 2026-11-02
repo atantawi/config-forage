@@ -491,3 +491,79 @@ def test_analyze_continues_with_a_warning_on_legacy_metadata(setup, capsys):
     err = capsys.readouterr().err
     assert "warning" in err and "missing from the runs manifest" in err
     assert (tmp / "out" / "table.md").exists()
+
+
+# --- engine-key contract: results made before all2all_backend/lptt/eplb were accepted never resume ---
+
+def _with_a2a(sp):
+    from config_forage.space import Knob, KnobSpace
+    return KnobSpace(sp.scenario, (*sp.knobs, Knob("all2all_backend", ("allgather_reducescatter", "deepep_v2"))))
+
+
+def test_engine_contract_is_empty_for_a_space_without_the_new_keys(setup):
+    from config_forage.blis.runner import engine_contract
+    sp, _, _ = setup
+    assert engine_contract(sp) == {}
+    assert engine_contract(_with_a2a(sp)) == {"engine_keys": 2}
+    from config_forage.space import Knob, KnobSpace
+    pinned = KnobSpace(sp.scenario, (*sp.knobs, Knob("long_prefill_token_threshold", (1024,))))
+    assert engine_contract(pinned) == {"engine_keys": 2}       # a pinned (single-valued) knob counts
+
+
+def _strip(path, key="engine_keys"):
+    m = json.loads(path.read_text())
+    m.pop(key, None)
+    path.write_text(json.dumps(m))
+
+
+def test_space_without_the_new_keys_writes_and_resumes_old_style_metadata(setup):
+    sp, runner, tmp = setup
+    out, side = tmp / "grid.jsonl", tmp / "grid.jsonl.meta.json"
+    grid.grid(sp, runner, out, workers=4, log=None)
+    run.bench(sp, runner, ["random"], [0], 20, tmp / "runs")
+    assert "engine_keys" not in json.loads(side.read_text())
+    assert "engine_keys" not in json.loads((tmp / "runs" / "manifest.json").read_text())
+    assert grid.grid(sp, runner, out, workers=4, log=None)["new"] == 0
+    assert run.bench(sp, runner, ["random"], [0, 1], 20, tmp / "runs")
+
+
+def test_space_with_a_new_key_refuses_an_old_style_grid(setup):
+    sp, runner, tmp = setup
+    sp2 = _with_a2a(sp)
+    out, side = tmp / "grid.jsonl", tmp / "grid.jsonl.meta.json"
+    grid.grid(sp2, runner, out, workers=4, log=None)
+    assert json.loads(side.read_text())["engine_keys"] == 2
+    assert grid.grid(sp2, runner, out, workers=4, log=None)["new"] == 0   # same contract resumes
+    _strip(side)
+    with pytest.raises(ValueError, match="engine_keys.*--out"):
+        grid.grid(sp2, runner, out, workers=4, log=None)
+    side.write_text(json.dumps({**json.loads(side.read_text()), "engine_keys": 3}))
+    with pytest.raises(ValueError, match="engine_keys"):
+        grid.grid(sp2, runner, out, workers=4, log=None)
+
+
+def test_space_with_a_new_key_refuses_an_old_style_manifest(setup):
+    sp, runner, tmp = setup
+    sp2 = _with_a2a(sp)
+    run.bench(sp2, runner, ["random"], [0], 20, tmp / "runs")
+    mp = tmp / "runs" / "manifest.json"
+    assert json.loads(mp.read_text())["engine_keys"] == 2
+    assert run.bench(sp2, runner, ["random"], [0, 1], 20, tmp / "runs")
+    _strip(mp)
+    with pytest.raises(ValueError, match="engine_keys.*--out"):
+        run.bench(sp2, runner, ["random"], [2], 20, tmp / "runs")
+    assert not (tmp / "runs" / "random" / "seed-2.json").exists()
+    mp.write_text(json.dumps({**json.loads(mp.read_text()), "engine_keys": 3}))
+    with pytest.raises(ValueError, match="engine_keys"):
+        run.bench(sp2, runner, ["random"], [2], 20, tmp / "runs")
+
+
+def test_analyze_refuses_runs_and_grid_of_different_engine_contracts(setup):
+    sp, runner, tmp = setup
+    sp2 = _with_a2a(sp)
+    grid.grid(sp2, runner, tmp / "grid.jsonl", workers=4, log=None)
+    run.bench(sp2, runner, ["random"], [0], 20, tmp / "runs")
+    assert analyze.check_space_match(tmp / "runs", tmp / "grid.jsonl")
+    _strip(tmp / "grid.jsonl.meta.json")
+    with pytest.raises(ValueError, match="engine_keys"):
+        analyze.check_space_match(tmp / "runs", tmp / "grid.jsonl")

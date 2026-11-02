@@ -36,7 +36,40 @@ SCENARIO_PARALLEL = ("tp", "pp", "dp", "enable_expert_parallel",       # -> scen
 # -> the scenario's `router.endpoint_picker_config`: an EndpointPickerConfig (a dict) written next to it
 SCENARIO_ROUTER = ("epp_config",)
 SCENARIO_ENGINE = ("quantization", "cache_dtype", "block_size", "max_num_batched_tokens",
-                   "max_num_seqs", "max_model_len", "cudagraph_mode", "gpu_memory_utilization")
+                   "max_num_seqs", "max_model_len", "cudagraph_mode", "gpu_memory_utilization",
+                   "all2all_backend", "long_prefill_token_threshold")
+# -> a sub-block of the scenario's engine section: {block: {field: type}}. Field names and types are
+# blis-vllm v0.32.0's engineconfig (EPLB); BLIS refuses an unknown field, so refuse it here first,
+# before a run. enable_eplb must be stated: a block without it is EPLB off, the same run as no block.
+# With EPLB on, the engine requires the EP width to divide experts + num_redundant_experts
+# (blis-vllm rules "expert-divisibility-under-eplb"), and `blis run` does not enforce it: an
+# indivisible layout runs and is priced. classify_config does not know the model, so run_one checks
+# it against the catalog (check_eplb_layout); classify_config refuses EPLB without expert parallelism.
+SCENARIO_ENGINE_BLOCKS = {"eplb": {"enable_eplb": bool, "num_redundant_experts": int}}
+REQUIRED_BLOCK_FIELDS = {"eplb": ("enable_eplb",)}
+# Block fields BLIS accepts but does not price -> refused with the reason, as UNSUPPORTED is.
+UNSUPPORTED_BLOCK_FIELDS = {"eplb": {
+    f: "inert in BLIS v0.14.0 (measured identical: glm-5.3-flash/h100/chatbot, 1 x tp4*dp2 + EP, "
+       "c=64, eplb on with 32 and with 64 redundant experts, 1 vs 1000000)"
+    for f in ("window_size", "step_interval")}}
+# Engine-release facts BLIS prices but `blis run` does not validate: a value outside the legal set is
+# priced anyway (an unrecognized all2all_backend gets the wrong volume basis), so it is refused here.
+# Transcribed from blis-vllm v0.32.0 rules/v0_29/pack.go (All2AllBackends, DefaultAll2AllBackend,
+# All2AllBackendRenames), as pinned by inference-sim v0.14.0. Add a release by adding its entry.
+#   aliases: names the engine accepts but replaces by another backend; measured byte-identical to
+#   that backend (glm-5.3-flash/h100/chatbot, 1 x tp4*dp2 + EP, c=64: pplx and naive both priced
+#   exactly as allgather_reducescatter), so canonical_config rewrites them and they share its runs.
+ENGINE_RELEASES = {
+    "0.29.0": {
+        "all2all_backends": ("naive", "allgather_reducescatter", "pplx", "deepep_high_throughput",
+                             "deepep_low_latency", "deepep_v2", "flashinfer_all2allv",
+                             "flashinfer_nvlink_one_sided", "flashinfer_nvlink_two_sided",
+                             "mori_high_throughput", "mori_low_latency", "nixl_ep"),
+        "all2all_default": "allgather_reducescatter",
+        "all2all_aliases": {"pplx": "allgather_reducescatter", "naive": "allgather_reducescatter"},
+    },
+}
+DEFAULT_ENGINE_VERSION = "0.29.0"   # the CLI's --engine-version default
 CLI_FLAGS = {"num_instances": "--num-instances", "concurrency": "--concurrency",
              "scheduler": "--scheduler", "preemption_policy": "--preemption-policy"}
 PARALLEL_DEFAULTS = {"tp": 1, "pp": 1, "dp": 1, "enable_expert_parallel": False}
@@ -63,7 +96,6 @@ UNSUPPORTED = {
     "num_speculative_tokens": "speculative decoding is not yet validated on the kernel backend",
     "speculative_acceptance_rate": "speculative decoding is not yet validated on the kernel backend",
     "speculative_method": "speculative decoding is not yet validated on the kernel backend",
-    "long_prefill_token_threshold": "not a kernel scenario field (chunked-prefill threshold is engine-internal)",
     "routing_policy": "removed in BLIS v0.12.0: route with an EndpointPickerConfig (epp_config)",
     "routing_scorers": "removed in BLIS v0.12.0: route with an EndpointPickerConfig (epp_config)",
     "admission_policy": "removed in BLIS v0.12.0: admit with an EndpointPickerConfig (epp_config)",
@@ -74,15 +106,81 @@ class ConfigError(ValueError):
     pass
 
 
-def classify_config(config):
+def canonical_config(config, engine_version=DEFAULT_ENGINE_VERSION):
+    """`config` with its measured no-op engine values made absent, so a no-op spelling shares the
+    default's cache key and scenario file instead of buying a duplicate run. Each was measured
+    byte-identical to leaving it out (glm-5.3-flash/h100/chatbot, 1 x tp4*dp2 + EP, c=64), and each
+    is also the engine's own zero value or default:
+      - long_prefill_token_threshold 0 (uncapped prefills, the engine default);
+      - all2all_backend that resolves (through the release's aliases) to the release's default;
+      - an all2all alias otherwise becomes the backend it is replaced by;
+      - eplb with enable_eplb false (the whole block: EPLB off, whatever else it states);
+      - num_redundant_experts 0 inside an enabled eplb.
+    `{enable_eplb: true}` is NOT dropped: it measured identical only at an EP width dividing the
+    expert count, and the engine prices an indivisible width differently with EPLB on. Malformed
+    values are left as they are, for classify_config to refuse."""
+    out = dict(config)
+    if out.get("long_prefill_token_threshold") == 0 and type(out["long_prefill_token_threshold"]) is int:
+        del out["long_prefill_token_threshold"]
+    rel = ENGINE_RELEASES.get(engine_version)
+    a2a = out.get("all2all_backend")
+    if rel and isinstance(a2a, str):
+        a2a = rel["all2all_aliases"].get(a2a, a2a)
+        if a2a == rel["all2all_default"]:
+            del out["all2all_backend"]
+        else:
+            out["all2all_backend"] = a2a
+    eplb = out.get("eplb")
+    try:
+        engine_block("eplb", eplb) if "eplb" in out else None
+    except ConfigError:
+        eplb = None                                 # malformed: left for classify_config to refuse
+    if isinstance(eplb, dict):
+        if eplb.get("enable_eplb") is False:
+            del out["eplb"]
+        elif eplb.get("num_redundant_experts") == 0 and type(eplb["num_redundant_experts"]) is int:
+            out["eplb"] = {f: x for f, x in eplb.items() if f != "num_redundant_experts"}
+    return out
+
+
+def check_engine_values(engine, engine_version):
+    """Refuse an engine value BLIS would price without validating (see ENGINE_RELEASES)."""
+    if "all2all_backend" in engine:
+        v = engine["all2all_backend"]
+        rel = ENGINE_RELEASES.get(engine_version)
+        if rel is None:
+            raise ConfigError(f"'all2all_backend': no legal backend list for engine_version "
+                              f"{engine_version!r}; known = {sorted(ENGINE_RELEASES)}")
+        if not isinstance(v, str) or v not in rel["all2all_backends"]:
+            raise ConfigError(f"'all2all_backend': {v!r} is not accepted by engine {engine_version}; "
+                              f"legal = {sorted(rel['all2all_backends'])}")
+    if "long_prefill_token_threshold" in engine:
+        v, cap = engine["long_prefill_token_threshold"], engine["max_model_len"]
+        if type(v) is not int or v < 0:
+            raise ConfigError(f"'long_prefill_token_threshold': must be a non-negative integer, got {v!r}")
+        # the engine refuses one above max_model_len at startup (vllm/config/scheduler.py
+        # verify_max_model_len); `blis run` does not, and would price it
+        if isinstance(cap, int) and v > cap:
+            raise ConfigError(f"'long_prefill_token_threshold': {v} exceeds max_model_len {cap}; "
+                              f"the engine refuses it at startup")
+
+
+def classify_config(config, engine_version=DEFAULT_ENGINE_VERSION):
     """Split a candidate into (parallel, engine, cli, router); raise ConfigError on unknown/unsupported
-    keys. Router knobs (config_forage.router) are translated to epp_config first. router is {} or
-    {"epp_config": <EndpointPickerConfig dict>}."""
+    keys or illegal engine values for `engine_version`. Router knobs (config_forage.router) are
+    translated to epp_config first, and measured no-op engine values dropped (canonical_config).
+    router is {} or {"epp_config": <EndpointPickerConfig dict>}."""
     try:
         config = router_knobs.to_blis(config)
     except ValueError as e:
         raise ConfigError(str(e)) from None
     parallel, engine, cli, router = dict(PARALLEL_DEFAULTS), dict(ENGINE_DEFAULTS), {}, {}
+    raw_engine = {k: config[k] for k in ("all2all_backend", "long_prefill_token_threshold") if k in config}
+    check_engine_values({"max_model_len": config.get("max_model_len", ENGINE_DEFAULTS["max_model_len"]),
+                         **raw_engine}, engine_version)
+    if "eplb" in config:
+        engine_block("eplb", config["eplb"])        # refuse a malformed block before it is normalised
+    config = canonical_config(config, engine_version)
     for k, v in config.items():
         if k in SCENARIO_PARALLEL:
             parallel[k] = v
@@ -92,13 +190,15 @@ def classify_config(config):
             router[k] = v
         elif k in SCENARIO_ENGINE:
             engine[k] = v
+        elif k in SCENARIO_ENGINE_BLOCKS:
+            engine[k] = engine_block(k, v)
         elif k in CLI_FLAGS:
             cli[k] = v
         elif k in UNSUPPORTED:
             raise ConfigError(f"{k!r}: {UNSUPPORTED[k]}")
         else:
             supported = (sorted(SCENARIO_PARALLEL) + sorted(SCENARIO_ROUTER) + sorted(SCENARIO_ENGINE)
-                         + sorted(CLI_FLAGS))
+                         + sorted(SCENARIO_ENGINE_BLOCKS) + sorted(CLI_FLAGS))
             raise ConfigError(f"{k!r}: unknown key; supported = {supported}")
     if parallel["pp"] != 1:
         raise ConfigError("pp>1: the pinned kernel does not price pipeline parallelism")
@@ -114,6 +214,10 @@ def classify_config(config):
             f"per-instance footprint tp*pp*dp={fp} spans {fp / GPUS_PER_NODE:.2g} nodes: a "
             f"multi-node instance must fill whole {GPUS_PER_NODE}-GPU nodes (use a footprint that "
             f"is a multiple of {GPUS_PER_NODE}, or scale out with num_instances instead)")
+    if engine.get("eplb", {}).get("enable_eplb") and parallel["enable_expert_parallel"] is not True:
+        # BLIS prices it (EP width 1 with EPLB on: 32 redundant experts measured 1.7% slower than
+        # none, glm-5.3-flash tp4*dp2), but the engine rebalances experts only across EP ranks
+        raise ConfigError("'eplb': enable_eplb needs enable_expert_parallel")
     lb = parallel.get("data_parallel_load_balancing")
     if lb is not None and parallel["dp"] == 1:
         # without DP there is nothing to balance; stating it would split the cache for the same run
@@ -121,6 +225,71 @@ def classify_config(config):
     if lb == "hybrid" and fp > GPUS_PER_NODE:
         raise ConfigError("data_parallel_load_balancing hybrid: BLIS refuses a replica across nodes")
     return parallel, engine, cli, router
+
+
+def engine_block(name, v):
+    """A copy of the engine sub-block `name`, checked against SCENARIO_ENGINE_BLOCKS: a mapping of
+    known fields, the required ones stated, each of its type (counts non-negative ints, not bools)."""
+    fields = SCENARIO_ENGINE_BLOCKS[name]
+    if not isinstance(v, dict):
+        raise ConfigError(f"{name!r}: must be a mapping of {sorted(fields)}")
+    for f in REQUIRED_BLOCK_FIELDS.get(name, ()):
+        if f not in v:
+            raise ConfigError(f"{name!r}: must state {f!r}")
+    for f, x in v.items():
+        if f in UNSUPPORTED_BLOCK_FIELDS.get(name, {}):
+            raise ConfigError(f"{name!r}: {f!r}: {UNSUPPORTED_BLOCK_FIELDS[name][f]}")
+        if f not in fields:
+            raise ConfigError(f"{name!r}: unknown field {f!r}; supported = {sorted(fields)}")
+        t = fields[f]
+        if type(x) is not t or (t is int and x < 0):
+            want = "true or false" if t is bool else "a non-negative integer"
+            raise ConfigError(f"{name!r}: {f!r} must be {want}, got {x!r}")
+    return dict(v)
+
+
+_EXPERTS_CACHE = {}
+
+
+def model_experts(catalog, model):
+    """The model's routed expert count as BLIS reads it: the largest `experts:` over the catalog
+    graph's nodes (blis-vllm rules totalExperts), 0 for a graph with none (a dense model). A shared
+    expert node (experts: 1) never wins over the routed one. Plain line scan: no yaml dependency.
+    Raise ConfigError when the graph cannot be read."""
+    key = (catalog, model)
+    if key not in _EXPERTS_CACHE:
+        path = os.path.join(catalog, "models", model, "graph.yaml")
+        try:
+            with open(path, encoding="utf-8") as f:
+                counts = [int(line.split(":", 1)[1].split("#")[0]) for line in f
+                          if line.strip().startswith("experts:")]
+        except (OSError, ValueError) as e:
+            raise ConfigError(f"cannot read the expert count from {path}: {e}") from None
+        _EXPERTS_CACHE[key] = max(counts, default=0)
+    return _EXPERTS_CACHE[key]
+
+
+def check_eplb_layout(catalog, model, parallel, engine):
+    """With EPLB on, refuse a layout whose EP width does not divide experts + redundant experts, and
+    one that cannot be checked (no catalog, no model entry, no routed experts) rather than price it."""
+    eplb = engine.get("eplb")
+    if not eplb or not eplb.get("enable_eplb"):
+        return
+    if not catalog or not model:
+        raise ConfigError("'eplb': cannot validate the EPLB layout without a catalog and a model")
+    try:
+        experts = model_experts(catalog, model)
+    except ConfigError as e:
+        raise ConfigError(f"'eplb': cannot validate the EPLB layout: {e}") from None
+    if experts < 2:
+        raise ConfigError(f"'eplb': cannot validate the EPLB layout: {model} has no routed experts")
+    width = parallel["tp"] * parallel["pp"] * parallel["dp"]    # EP spans the TP x DP ranks
+    redundant = eplb.get("num_redundant_experts", 0)
+    if (experts + redundant) % width:
+        need = (width - (experts + redundant) % width) % width
+        raise ConfigError(f"'eplb': {experts} experts + {redundant} redundant = {experts + redundant}, "
+                          f"which expert-parallel width {width} does not divide; {need} more redundant "
+                          f"experts would make it divide")
 
 
 def footprint_gpus(parallel):
@@ -243,8 +412,10 @@ def scenario_yaml(model, hardware, engine_version, parallel, engine, name, num_i
     directory) becomes the Deployment's router block; without it the router runs its built-in
     default configuration."""
     def block(d, indent):
+        # a mapping value (an engine sub-block, e.g. eplb) is written as a nested block under its key
         pad = " " * indent
-        return "\n".join(f"{pad}{k}: {json.dumps(v)}" for k, v in d.items())
+        return "\n".join(f"{pad}{k}:\n{block(v, indent + 2)}" if isinstance(v, dict)
+                         else f"{pad}{k}: {json.dumps(v)}" for k, v in d.items())
     nodes = pool_nodes(parallel, num_instances)
     # A multi-node cluster MUST name a fabric: BLIS resolves cross-node cost from the fabric,
     # not the chip, and refuses the scenario otherwise ("scenario.cluster.fabric: required for
@@ -359,7 +530,8 @@ def run_one(blis, catalog, registry, scenarios_dir, model, hardware, engine_vers
     """Run one kernel-priced BLIS config and return a record dict. No runs.jsonl I/O (caller writes)."""
     rec = _record_shell(config, phase)
     try:
-        parallel, engine, cli, router = classify_config(config)
+        parallel, engine, cli, router = classify_config(config, engine_version)
+        check_eplb_layout(catalog, model, parallel, engine)
         shape = workloads.shape(workload or workloads.DISTRIBUTION, catalog)
     except (ConfigError, ValueError) as e:
         # Same row SHAPE as a real run so neither sweep_pool's summary nor the report trips on a

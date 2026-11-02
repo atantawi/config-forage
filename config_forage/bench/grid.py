@@ -1,7 +1,8 @@
 """cf-grid: probe every feasible decision once; one JSON line per config, resumable by decision.
 
-A sidecar OUT.meta.json holds the space_hash and the BLIS pins; a resume into a grid whose sidecar
-differs in either, or that has rows but no sidecar, is refused. The sidecar also records, as
+A sidecar OUT.meta.json holds the space_hash, the BLIS pins and, for a space using an engine key
+accepted later, its engine-key contract (runner.engine_contract); a resume into a grid whose sidecar
+differs in any, or that has rows but no sidecar, is refused. The sidecar also records, as
 information only, the git_sha of the first call and {git_sha, dirty, time} of every call."""
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from pathlib import Path
 
 import config_forage.bench as _pkg
 from config_forage.bench.analyze import load_grid
-from config_forage.blis.runner import PINS, BlisEnv, CachedRunner, run_batch
+from config_forage.blis.runner import PINS, BlisEnv, CachedRunner, engine_contract, run_batch
 from config_forage.feasibility import enumerate_feasible
 from config_forage.probe import probe
 from config_forage.space import KnobSpace, load_space, space_hash
@@ -32,9 +33,11 @@ def meta_path(out: Path) -> Path:
 
 
 def _check_meta(space: KnobSpace, out: Path, rows: int) -> dict:
-    """The sidecar to write for this call; raise if an existing grid's sidecar differs in space_hash
-    or pins, or is missing while the grid has rows. git_sha is not checked."""
-    want, mp, have = {"space_hash": space_hash(space), "pins": list(PINS)}, meta_path(out), {}
+    """The sidecar to write for this call; raise if an existing grid's sidecar differs in space_hash,
+    pins or engine-key contract (an old sidecar lacks the field: its rows predate the keys, refused
+    then), or is missing while the grid has rows. git_sha is not checked."""
+    want = {"space_hash": space_hash(space), "pins": list(PINS), **engine_contract(space)}
+    mp, have = meta_path(out), {}
     if mp.exists():
         have = json.loads(mp.read_text())
         bad = [k for k in want if have.get(k) != want[k]]

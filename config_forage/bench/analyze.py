@@ -278,16 +278,18 @@ def _plot_runs_to(by: dict[str, list[Trace]], opt: float, budget: int, path: Pat
 def check_space_match(runs_dir: Path, grid_path: Path, log=None) -> bool:
     """Compare the space_hash of the runs manifest and of the grid sidecar (<grid>.meta.json): regret
     against another space's optimum is meaningless. Raise ValueError, naming both hashes, when both
-    exist and differ. Warn (to log) and return False when either is missing (legacy metadata, so
-    the analysis goes on); True when they agree."""
+    exist and differ, or when their engine-key contracts (runner.engine_contract) differ. Warn (to
+    log) and return False when either space_hash is missing (legacy metadata, so the analysis goes
+    on); True when they agree."""
     def read(p: Path):
         try:
-            return json.loads(p.read_text()).get("space_hash")
+            return json.loads(p.read_text())
         except (FileNotFoundError, json.JSONDecodeError):
-            return None
+            return {}
     log = sys.stderr if log is None else log
-    runs_h = read(Path(runs_dir) / "manifest.json")
-    grid_h = read(Path(grid_path).with_name(Path(grid_path).name + ".meta.json"))
+    runs_m = read(Path(runs_dir) / "manifest.json")
+    grid_m = read(Path(grid_path).with_name(Path(grid_path).name + ".meta.json"))
+    runs_h, grid_h = runs_m.get("space_hash"), grid_m.get("space_hash")
     if runs_h is None or grid_h is None:
         which = " and ".join(w for w, h in (("runs manifest", runs_h), ("grid sidecar", grid_h)) if h is None)
         print(f"cf-analyze: warning: space_hash missing from the {which}; cannot check that the runs and "
@@ -297,6 +299,10 @@ def check_space_match(runs_dir: Path, grid_path: Path, log=None) -> bool:
         raise ValueError(f"space_hash of the runs ({runs_h}, {runs_dir}) and of the grid ({grid_h}, {grid_path}) "
                          f"differ: they are of different spaces, so regret would be against another space's "
                          f"optimum; analyze the runs against their own space's grid")
+    if runs_m.get("engine_keys") != grid_m.get("engine_keys"):
+        raise ValueError(f"engine_keys contract of the runs ({runs_m.get('engine_keys')}, {runs_dir}) and of "
+                         f"the grid ({grid_m.get('engine_keys')}, {grid_path}) differ: one was made before "
+                         f"this space's engine keys were accepted; regenerate it with a fresh --out")
     return True
 
 
