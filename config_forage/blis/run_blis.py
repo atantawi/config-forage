@@ -36,7 +36,14 @@ SCENARIO_PARALLEL = ("tp", "pp", "dp", "enable_expert_parallel",       # -> scen
 # -> the scenario's `router.endpoint_picker_config`: an EndpointPickerConfig (a dict) written next to it
 SCENARIO_ROUTER = ("epp_config",)
 SCENARIO_ENGINE = ("quantization", "cache_dtype", "block_size", "max_num_batched_tokens",
-                   "max_num_seqs", "max_model_len", "cudagraph_mode", "gpu_memory_utilization")
+                   "max_num_seqs", "max_model_len", "cudagraph_mode", "gpu_memory_utilization",
+                   "all2all_backend", "long_prefill_token_threshold")
+# -> a sub-block of the scenario's engine section: {block: {field: type}}. Field names and types are
+# blis-vllm v0.32.0's engineconfig (EPLB); BLIS refuses an unknown field, so refuse it here first,
+# before a run. enable_eplb must be stated: a block without it is EPLB off, the same run as no block.
+SCENARIO_ENGINE_BLOCKS = {"eplb": {"enable_eplb": bool, "num_redundant_experts": int,
+                                   "window_size": int, "step_interval": int}}
+REQUIRED_BLOCK_FIELDS = {"eplb": ("enable_eplb",)}
 CLI_FLAGS = {"num_instances": "--num-instances", "concurrency": "--concurrency",
              "scheduler": "--scheduler", "preemption_policy": "--preemption-policy"}
 PARALLEL_DEFAULTS = {"tp": 1, "pp": 1, "dp": 1, "enable_expert_parallel": False}
@@ -63,7 +70,6 @@ UNSUPPORTED = {
     "num_speculative_tokens": "speculative decoding is not yet validated on the kernel backend",
     "speculative_acceptance_rate": "speculative decoding is not yet validated on the kernel backend",
     "speculative_method": "speculative decoding is not yet validated on the kernel backend",
-    "long_prefill_token_threshold": "not a kernel scenario field (chunked-prefill threshold is engine-internal)",
     "routing_policy": "removed in BLIS v0.12.0: route with an EndpointPickerConfig (epp_config)",
     "routing_scorers": "removed in BLIS v0.12.0: route with an EndpointPickerConfig (epp_config)",
     "admission_policy": "removed in BLIS v0.12.0: admit with an EndpointPickerConfig (epp_config)",
@@ -92,13 +98,15 @@ def classify_config(config):
             router[k] = v
         elif k in SCENARIO_ENGINE:
             engine[k] = v
+        elif k in SCENARIO_ENGINE_BLOCKS:
+            engine[k] = engine_block(k, v)
         elif k in CLI_FLAGS:
             cli[k] = v
         elif k in UNSUPPORTED:
             raise ConfigError(f"{k!r}: {UNSUPPORTED[k]}")
         else:
             supported = (sorted(SCENARIO_PARALLEL) + sorted(SCENARIO_ROUTER) + sorted(SCENARIO_ENGINE)
-                         + sorted(CLI_FLAGS))
+                         + sorted(SCENARIO_ENGINE_BLOCKS) + sorted(CLI_FLAGS))
             raise ConfigError(f"{k!r}: unknown key; supported = {supported}")
     if parallel["pp"] != 1:
         raise ConfigError("pp>1: the pinned kernel does not price pipeline parallelism")
@@ -121,6 +129,25 @@ def classify_config(config):
     if lb == "hybrid" and fp > GPUS_PER_NODE:
         raise ConfigError("data_parallel_load_balancing hybrid: BLIS refuses a replica across nodes")
     return parallel, engine, cli, router
+
+
+def engine_block(name, v):
+    """A copy of the engine sub-block `name`, checked against SCENARIO_ENGINE_BLOCKS: a mapping of
+    known fields, the required ones stated, each of its type (counts non-negative ints, not bools)."""
+    fields = SCENARIO_ENGINE_BLOCKS[name]
+    if not isinstance(v, dict):
+        raise ConfigError(f"{name!r}: must be a mapping of {sorted(fields)}")
+    for f in REQUIRED_BLOCK_FIELDS.get(name, ()):
+        if f not in v:
+            raise ConfigError(f"{name!r}: must state {f!r}")
+    for f, x in v.items():
+        if f not in fields:
+            raise ConfigError(f"{name!r}: unknown field {f!r}; supported = {sorted(fields)}")
+        t = fields[f]
+        if type(x) is not t or (t is int and x < 0):
+            want = "true or false" if t is bool else "a non-negative integer"
+            raise ConfigError(f"{name!r}: {f!r} must be {want}, got {x!r}")
+    return dict(v)
 
 
 def footprint_gpus(parallel):
@@ -243,8 +270,10 @@ def scenario_yaml(model, hardware, engine_version, parallel, engine, name, num_i
     directory) becomes the Deployment's router block; without it the router runs its built-in
     default configuration."""
     def block(d, indent):
+        # a mapping value (an engine sub-block, e.g. eplb) is written as a nested block under its key
         pad = " " * indent
-        return "\n".join(f"{pad}{k}: {json.dumps(v)}" for k, v in d.items())
+        return "\n".join(f"{pad}{k}:\n{block(v, indent + 2)}" if isinstance(v, dict)
+                         else f"{pad}{k}: {json.dumps(v)}" for k, v in d.items())
     nodes = pool_nodes(parallel, num_instances)
     # A multi-node cluster MUST name a fabric: BLIS resolves cross-node cost from the fabric,
     # not the chip, and refuses the scenario otherwise ("scenario.cluster.fabric: required for
