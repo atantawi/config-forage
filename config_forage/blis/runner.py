@@ -28,6 +28,12 @@ PINS = ("inference-sim v0.14.0 f2ba6bb1c189ed5a56933cfa3d0927eae3836ee9", "kerne
         "blis-vllm v0.32.0", "catalog 0.3.0", "registry v0.2.0", "workload as token-shape flags")
 
 
+# Engine keys accepted from contract 2 on. A config using one was refused (an error row, cached)
+# before; keying it under contract 2 keeps it off those rows without rotating PINS, so every other
+# config keeps its key and its cached run.
+ENGINE_KEYS_V2 = ("all2all_backend", "long_prefill_token_threshold", "eplb")
+
+
 def requests_for(concurrency: int, base: int = 80) -> int:
     """Requests per probe point: max(base, 4c) (as in inference-sim/blis-config-search run_search.py)."""
     return max(base, concurrency * 4)
@@ -51,13 +57,17 @@ class BlisEnv:
 def cache_key(config: dict, concurrency: int, seed: int, scenario: Scenario, shape: dict | None = None) -> str:
     """`shape` is the workload's token distribution (workloads.shape), keyed so a run is cached under
     what it drew from. Keys written before it existed (no "shape") are for runs that all drew from
-    workloads.DISTRIBUTION_SHAPE whatever their workload name said, and never match a key with one."""
+    workloads.DISTRIBUTION_SHAPE whatever their workload name said, and never match a key with one.
+    Likewise a config using ENGINE_KEYS_V2 is keyed under that contract (`engine_keys`); callers pass
+    the canonical config (run_blis.canonical_config), so a no-op spelling of one of them is not."""
     payload = {"config": config, "concurrency": concurrency, "seed": seed, "workload": scenario.workload,
                "num_requests": requests_for(concurrency, scenario.num_requests_base),
                "model": scenario.model, "hardware": scenario.hardware,
                "engine_version": scenario.engine_version, "pins": PINS}
     if shape is not None:
         payload["shape"] = shape
+    if any(k in config for k in ENGINE_KEYS_V2):
+        payload["engine_keys"] = 2
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 

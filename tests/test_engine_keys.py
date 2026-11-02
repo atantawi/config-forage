@@ -9,6 +9,9 @@ from config_forage.blis import run_blis
 from config_forage.blis.runner import BlisEnv, CachedRunner, cache_key
 from config_forage.space import Scenario
 
+import subprocess as _subprocess
+
+_REAL_RUN = _subprocess.run
 EP = {"tp": 4, "dp": 2, "enable_expert_parallel": True}
 EPLB = {"enable_eplb": True, "num_redundant_experts": 32}
 
@@ -177,8 +180,9 @@ def test_new_keys_change_the_scenario_file_and_the_cache_key(tmp_path):
 
 @pytest.mark.blis
 @pytest.mark.skipif(not os.environ.get("BLIS_BIN"), reason="BLIS_BIN not set")
-def test_blis_prices_the_new_engine_keys(tmp_path):
+def test_blis_prices_the_new_engine_keys(tmp_path, monkeypatch):
     """On an EP tp4*dp2 instance, each accepted key, set off its default, moves the metrics."""
+    monkeypatch.setattr(run_blis.subprocess, "run", _REAL_RUN)     # undo the _no_blis stub
     env = BlisEnv.from_env()
     env.scenarios_dir = tmp_path / "scenarios"
     sc = Scenario("glm-5.3-flash", "h100", "chatbot", 8, "0.29.0")
@@ -192,3 +196,111 @@ def test_blis_prices_the_new_engine_keys(tmp_path):
         m[name] = r["metrics"]
     for name in ("a2a", "lptt", "eplb"):
         assert m[name] != m["default"], name
+
+
+# --- eplb layouts: the EP width must divide the model's experts + redundant experts ---------------
+
+def _catalog(tmp_path, model, graph):
+    d = tmp_path / "catalog" / "models" / model
+    d.mkdir(parents=True)
+    (d / "graph.yaml").write_text(graph)
+    return str(tmp_path / "catalog")
+
+
+MOE_GRAPH = """layer_kinds:
+  - nodes:
+    - op: GroupedGEMM
+      role: shared_experts
+      experts: 1
+    - op: GroupedGEMM
+      role: experts
+      experts: 60
+      top_k: 4
+"""
+
+
+@pytest.fixture(autouse=True)
+def _no_blis(monkeypatch):
+    """run_one reaching BLIS records rc=7: these tests only ask whether it got that far."""
+    import subprocess
+    monkeypatch.setattr(run_blis.subprocess, "run",
+                        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 7, "", "stub"))
+
+
+def _run(tmp_path, catalog, model, config):
+    return run_blis.run_one("blis", catalog, "registry", str(tmp_path / "sc"), model, "h100", "0.29.0",
+                            None, 1, 0, None, config)
+
+
+def test_enabled_eplb_without_expert_parallel_refused():
+    with pytest.raises(run_blis.ConfigError, match="eplb.*needs enable_expert_parallel"):
+        run_blis.classify_config({"tp": 8, "eplb": {"enable_eplb": True}})
+    with pytest.raises(run_blis.ConfigError, match="eplb.*needs enable_expert_parallel"):
+        run_blis.classify_config({"tp": 8, "enable_expert_parallel": False, "eplb": EPLB})
+
+
+def test_model_experts_reads_the_largest_routed_count(tmp_path):
+    assert run_blis.model_experts(_catalog(tmp_path, "moe", MOE_GRAPH), "moe") == 60
+    assert run_blis.model_experts(_catalog(tmp_path / "d", "dense", "layer_kinds: []\n"), "dense") == 0
+
+
+def test_indivisible_eplb_layout_refused_with_the_numbers(tmp_path):
+    cat = _catalog(tmp_path, "moe", MOE_GRAPH)
+    rec = _run(tmp_path, cat, "moe", {**EP, "eplb": {"enable_eplb": True, "num_redundant_experts": 2}})
+    assert rec["returncode"] is None and rec["cmd"] is None
+    assert "60 experts + 2 redundant = 62" in rec["error"] and "width 8" in rec["error"]
+    rec = _run(tmp_path, cat, "moe", {**EP, "eplb": {"enable_eplb": True}})   # omitted = 0 redundant
+    assert "60 experts + 0 redundant = 60" in rec["error"]
+
+
+def test_divisible_eplb_layout_reaches_blis(tmp_path):
+    cat = _catalog(tmp_path, "moe", MOE_GRAPH)
+    rec = _run(tmp_path, cat, "moe", {**EP, "eplb": {"enable_eplb": True, "num_redundant_experts": 4}})
+    assert rec["cmd"] is not None and "experts" not in (rec["error"] or "")   # 64 % 8 == 0
+
+
+@pytest.mark.parametrize("why", ["dense", "no catalog", "no model entry"])
+def test_eplb_that_cannot_be_validated_is_refused(tmp_path, why):
+    cat = {"dense": _catalog(tmp_path, "dense", "layer_kinds: []\n"), "no catalog": None,
+           "no model entry": str(tmp_path)}[why]
+    rec = _run(tmp_path, cat, "dense", {**EP, "eplb": EPLB})
+    assert rec["returncode"] is None and "eplb" in rec["error"] and "cannot validate" in rec["error"]
+
+
+def test_eplb_off_needs_no_catalog(tmp_path):
+    rec = _run(tmp_path, None, "dense", {**EP, "eplb": {"enable_eplb": False}})
+    assert rec["cmd"] is not None
+
+
+@pytest.mark.skipif(not os.environ.get("BLIS_CATALOG"), reason="BLIS_CATALOG not set")
+def test_real_catalog_glm53_flash_has_288_experts(tmp_path):
+    cat = os.environ["BLIS_CATALOG"]
+    assert run_blis.model_experts(cat, "glm-5.3-flash") == 288
+    ok = _run(tmp_path, cat, "glm-5.3-flash", {**EP, "eplb": EPLB})        # 320 % 8 == 0
+    assert ok["cmd"] is not None
+    bad = _run(tmp_path, cat, "glm-5.3-flash", {**EP, "eplb": {"enable_eplb": True, "num_redundant_experts": 30}})
+    assert "288 experts + 30 redundant = 318" in bad["error"]
+
+
+# --- cache contract: configs using the keys accepted here never hit refusal rows cached before -----
+
+KEY_AT_MAIN = "0cce6fcd158a6d91db7d986f797942a7cd289f8b744f94cbf55da7d3cd4098bf"  # cache_key at 3ef1737
+
+
+def test_config_without_the_new_keys_keeps_its_key_from_main():
+    assert cache_key({"tp": 8, "num_instances": 1}, 8, 0, SC) == KEY_AT_MAIN
+
+
+@pytest.mark.parametrize("extra", [{"all2all_backend": "deepep_v2"}, {"long_prefill_token_threshold": 64},
+                                   {"eplb": {"enable_eplb": True}}])
+def test_config_with_a_new_key_gets_a_new_key(extra):
+    import hashlib
+    import json
+
+    from config_forage.blis.runner import PINS, requests_for
+    cfg = {**BASE, **extra}
+    old = {"config": cfg, "concurrency": 8, "seed": 0, "workload": SC.workload,
+           "num_requests": requests_for(8, SC.num_requests_base), "model": SC.model,
+           "hardware": SC.hardware, "engine_version": SC.engine_version, "pins": PINS}
+    old_key = hashlib.sha256(json.dumps(old, sort_keys=True, default=str).encode()).hexdigest()
+    assert cache_key(cfg, 8, 0, SC) != old_key

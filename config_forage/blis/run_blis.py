@@ -41,10 +41,10 @@ SCENARIO_ENGINE = ("quantization", "cache_dtype", "block_size", "max_num_batched
 # -> a sub-block of the scenario's engine section: {block: {field: type}}. Field names and types are
 # blis-vllm v0.32.0's engineconfig (EPLB); BLIS refuses an unknown field, so refuse it here first,
 # before a run. enable_eplb must be stated: a block without it is EPLB off, the same run as no block.
-# NOT checked here: with EPLB on, the engine requires the EP width to divide experts +
-# num_redundant_experts (blis-vllm rules "expert-divisibility-under-eplb"), and `blis run` does not
-# enforce it -- an indivisible layout runs and is priced. The check needs the model's expert count,
-# per-model data this classifier does not read; a caller that has it should refuse the layout.
+# With EPLB on, the engine requires the EP width to divide experts + num_redundant_experts
+# (blis-vllm rules "expert-divisibility-under-eplb"), and `blis run` does not enforce it: an
+# indivisible layout runs and is priced. classify_config does not know the model, so run_one checks
+# it against the catalog (check_eplb_layout); classify_config refuses EPLB without expert parallelism.
 SCENARIO_ENGINE_BLOCKS = {"eplb": {"enable_eplb": bool, "num_redundant_experts": int}}
 REQUIRED_BLOCK_FIELDS = {"eplb": ("enable_eplb",)}
 # Block fields BLIS accepts but does not price -> refused with the reason, as UNSUPPORTED is.
@@ -214,6 +214,10 @@ def classify_config(config, engine_version=DEFAULT_ENGINE_VERSION):
             f"per-instance footprint tp*pp*dp={fp} spans {fp / GPUS_PER_NODE:.2g} nodes: a "
             f"multi-node instance must fill whole {GPUS_PER_NODE}-GPU nodes (use a footprint that "
             f"is a multiple of {GPUS_PER_NODE}, or scale out with num_instances instead)")
+    if engine.get("eplb", {}).get("enable_eplb") and parallel["enable_expert_parallel"] is not True:
+        # BLIS prices it (EP width 1 with EPLB on: 32 redundant experts measured 1.7% slower than
+        # none, glm-5.3-flash tp4*dp2), but the engine rebalances experts only across EP ranks
+        raise ConfigError("'eplb': enable_eplb needs enable_expert_parallel")
     lb = parallel.get("data_parallel_load_balancing")
     if lb is not None and parallel["dp"] == 1:
         # without DP there is nothing to balance; stating it would split the cache for the same run
@@ -242,6 +246,50 @@ def engine_block(name, v):
             want = "true or false" if t is bool else "a non-negative integer"
             raise ConfigError(f"{name!r}: {f!r} must be {want}, got {x!r}")
     return dict(v)
+
+
+_EXPERTS_CACHE = {}
+
+
+def model_experts(catalog, model):
+    """The model's routed expert count as BLIS reads it: the largest `experts:` over the catalog
+    graph's nodes (blis-vllm rules totalExperts), 0 for a graph with none (a dense model). A shared
+    expert node (experts: 1) never wins over the routed one. Plain line scan: no yaml dependency.
+    Raise ConfigError when the graph cannot be read."""
+    key = (catalog, model)
+    if key not in _EXPERTS_CACHE:
+        path = os.path.join(catalog, "models", model, "graph.yaml")
+        try:
+            with open(path, encoding="utf-8") as f:
+                counts = [int(line.split(":", 1)[1].split("#")[0]) for line in f
+                          if line.strip().startswith("experts:")]
+        except (OSError, ValueError) as e:
+            raise ConfigError(f"cannot read the expert count from {path}: {e}") from None
+        _EXPERTS_CACHE[key] = max(counts, default=0)
+    return _EXPERTS_CACHE[key]
+
+
+def check_eplb_layout(catalog, model, parallel, engine):
+    """With EPLB on, refuse a layout whose EP width does not divide experts + redundant experts, and
+    one that cannot be checked (no catalog, no model entry, no routed experts) rather than price it."""
+    eplb = engine.get("eplb")
+    if not eplb or not eplb.get("enable_eplb"):
+        return
+    if not catalog or not model:
+        raise ConfigError("'eplb': cannot validate the EPLB layout without a catalog and a model")
+    try:
+        experts = model_experts(catalog, model)
+    except ConfigError as e:
+        raise ConfigError(f"'eplb': cannot validate the EPLB layout: {e}") from None
+    if experts < 2:
+        raise ConfigError(f"'eplb': cannot validate the EPLB layout: {model} has no routed experts")
+    width = parallel["tp"] * parallel["pp"] * parallel["dp"]    # EP spans the TP x DP ranks
+    redundant = eplb.get("num_redundant_experts", 0)
+    if (experts + redundant) % width:
+        need = (width - (experts + redundant) % width) % width
+        raise ConfigError(f"'eplb': {experts} experts + {redundant} redundant = {experts + redundant}, "
+                          f"which expert-parallel width {width} does not divide; {need} more redundant "
+                          f"experts would make it divide")
 
 
 def footprint_gpus(parallel):
@@ -483,6 +531,7 @@ def run_one(blis, catalog, registry, scenarios_dir, model, hardware, engine_vers
     rec = _record_shell(config, phase)
     try:
         parallel, engine, cli, router = classify_config(config, engine_version)
+        check_eplb_layout(catalog, model, parallel, engine)
         shape = workloads.shape(workload or workloads.DISTRIBUTION, catalog)
     except (ConfigError, ValueError) as e:
         # Same row SHAPE as a real run so neither sweep_pool's summary nor the report trips on a
