@@ -34,6 +34,14 @@ PINS = ("inference-sim v0.14.0 f2ba6bb1c189ed5a56933cfa3d0927eae3836ee9", "kerne
 ENGINE_KEYS_V2 = ("all2all_backend", "long_prefill_token_threshold", "eplb")
 
 
+def engine_contract(space) -> dict:
+    """The engine-key contract a space's stored results (cf-grid sidecar, cf-bench manifest) carry:
+    {"engine_keys": 2} when a knob names one of ENGINE_KEYS_V2 (a pinned engine setting is a
+    single-valued knob, so it counts), else {} -- so a space without them writes exactly the metadata
+    it did before and its existing results resume; one with them refuses results made before."""
+    return {"engine_keys": 2} if any(n in ENGINE_KEYS_V2 for n in space.names) else {}
+
+
 def requests_for(concurrency: int, base: int = 80) -> int:
     """Requests per probe point: max(base, 4c) (as in inference-sim/blis-config-search run_search.py)."""
     return max(base, concurrency * 4)
