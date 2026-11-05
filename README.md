@@ -115,6 +115,13 @@ configures. A space states it with flat knobs (`config_forage/router.py`):
 The runner writes the resulting config next to the scenario. The cache key covers that config, not
 just the knob values. `routing_policy`, `routing_scorers` and `admission_policy` are refused.
 
+Families can also come from files. The scenario names them in `router_files: {name: path}`, each path
+relative to the space file. An `endpoint_picker_config` value naming one runs that EndpointPickerConfig
+as is:
+- the name must not shadow a built-in family;
+- a `<scorer>_weight` knob cannot override it;
+- the space hash covers the files' contents, so editing one stops a resume into old results.
+
 ## Ladder scoring
 
 A space may set `scoring: ladder` and `concurrency: [c1, c2, ...]` (strictly ascending) in its scenario

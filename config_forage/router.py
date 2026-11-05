@@ -44,10 +44,12 @@ def endpoint_picker_config(family: str, weights: dict[str, float] | None = None)
                                                 {"pluginRef": picker}]}]}
 
 
-def to_blis(config: dict) -> dict:
+def to_blis(config: dict, files: dict | None = None) -> dict:
     """config with its router knobs replaced by `epp_config` (an EndpointPickerConfig); identity when
-    it has none. Raises ValueError for a weight knob without a family, one the family lacks, or
-    router knobs next to an explicit `epp_config` (two router representations: neither may win)."""
+    it has none. `files` maps family names loaded from a space's `router_files` to their
+    EndpointPickerConfig, used as is. Raises ValueError for a weight knob without a family, one the
+    family lacks, a weight knob next to a file family (its weights are the file's), or router knobs
+    next to an explicit `epp_config` (two router representations: neither may win)."""
     if not any(k in config for k in ROUTER_KNOBS):
         return config
     if "epp_config" in config:
@@ -58,4 +60,10 @@ def to_blis(config: dict) -> dict:
     if FAMILY_KNOB not in config:
         raise ValueError(f"router weight knobs {sorted(k for k in WEIGHT_KNOBS if k in config)} "
                          f"need {FAMILY_KNOB}")
-    return {**rest, "epp_config": endpoint_picker_config(config[FAMILY_KNOB], weights)}
+    family = config[FAMILY_KNOB]
+    if files and family in files:
+        if weights:
+            raise ValueError(f"router weight knobs {sorted(k for k in WEIGHT_KNOBS if k in config)} cannot "
+                             f"override {FAMILY_KNOB} {family!r}, which is read from a file")
+        return {**rest, "epp_config": files[family]}
+    return {**rest, "epp_config": endpoint_picker_config(family, weights)}
