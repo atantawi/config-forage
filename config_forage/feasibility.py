@@ -1,6 +1,6 @@
 """Exact topology feasibility (rules from blis-config-search topologies.py) and its biaser.
 
-Multi-node instances are allowed as BLIS v0.14.0 places them: a width tp·dp above one node must fill
+Multi-node instances are allowed as BLIS (v0.14.0 and v0.15.0) places them: a width tp·dp above one node must fill
 whole nodes. Upstream's topologies.py keeps one instance per node unless a model does not fit."""
 
 from __future__ import annotations

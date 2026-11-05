@@ -86,3 +86,21 @@ class Deadline:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, self._old)
         return False
+
+
+def blis_env_for(stack_name: str):
+    """The real-BLIS env (BlisEnv.from_env) when it holds stack `stack_name`. Skip the test when the
+    binary is built from another stack's commit (a `-m blis` run covers the stack its BLIS_* variables
+    point at); with the commit right, a catalog or registry at the wrong tag fails it (check_binary)."""
+    from pathlib import Path
+
+    import pytest
+
+    from config_forage.blis.runner import BlisEnv, _git, check_binary
+    from config_forage.blis.stacks import STACKS
+    env, stack = BlisEnv.from_env(), STACKS[stack_name]
+    sim = Path(env.blis).parent
+    if (sim / "main.go").exists() and _git(sim, "rev-parse", "HEAD") != stack.sim_sha:
+        pytest.skip(f"BLIS_BIN is not built from stack {stack_name}'s commit {stack.sim_sha}")
+    check_binary(env, stack)
+    return env

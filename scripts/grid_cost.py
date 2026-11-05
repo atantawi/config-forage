@@ -16,7 +16,7 @@ import numpy as np
 
 from config_forage.blis.runner import BlisEnv, CachedRunner, run_batch
 from config_forage.feasibility import enumerate_feasible
-from config_forage.probe import probe
+from config_forage.probe import score_config
 from config_forage.space import load_space
 
 
@@ -43,7 +43,7 @@ def main() -> None:
 
     runner.run_fn = timed
     t0 = time.monotonic()
-    res = run_batch(lambda d: probe(runner, sp.config(d), sp.scenario), sample, a.workers)
+    res = run_batch(lambda d: score_config(runner, sp.config(d), sp.scenario), sample, a.workers)
     wall = time.monotonic() - t0
     scored = [p for p in res if p.score is not None]
     n = len(sample)

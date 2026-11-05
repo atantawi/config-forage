@@ -567,3 +567,64 @@ def test_analyze_refuses_runs_and_grid_of_different_engine_contracts(setup):
     _strip(tmp / "grid.jsonl.meta.json")
     with pytest.raises(ValueError, match="engine_keys"):
         analyze.check_space_match(tmp / "runs", tmp / "grid.jsonl")
+
+
+# --- ladder scoring -------------------------------------------------------------------------------
+
+LADDER = Path(__file__).parent.parent / "spaces" / "examples" / "ladder-example.yaml"
+
+
+def ladder_setup(tmp_path):
+    sp = load_space(LADDER)
+
+    def fn(config, c, seed):
+        r = fake_blis(config, c, seed)
+        r["metrics"]["itl_p99_ms"] = 10.0
+        r["metrics_all_instances"] = [dict(r["metrics"])]
+        r["deployment"] = {"gpus": sp.scenario.gpu_budget}
+        return r
+    return sp, CachedRunner(None, sp.scenario, tmp_path / "cache", run_fn=fn)
+
+
+def test_ladder_example_space_loads_and_default_is_feasible():
+    from config_forage.feasibility import is_feasible
+    sp = load_space(LADDER)
+    assert sp.scenario.scoring == "ladder" and sp.scenario.stack == "v0.15.0"
+    cfg = sp.default_config()
+    assert is_feasible({k: cfg[k] for k in ("tp", "dp", "enable_expert_parallel")}, sp.scenario)
+
+
+def test_bench_ladder_space(tmp_path):
+    from config_forage.blis.stacks import STACKS
+    sp, runner = ladder_setup(tmp_path)
+    ts = run.bench(sp, runner, ["random"], [0, 1], 12, tmp_path / "runs")
+    from config_forage.probe import Objective
+    p = Objective(sp, runner)(next(iter(enumerate_feasible(sp))))
+    assert p.c_star is None and p.diagnostics["scoring"] == "ladder"
+    assert len(ts) == 2 and all(t.points and t.points[-1].best_score is not None for t in ts)
+    m = json.loads((tmp_path / "runs" / "manifest.json").read_text())
+    assert m["pins"] == list(STACKS["v0.15.0"].pins)
+
+
+def test_grid_ladder_rows(tmp_path):
+    sp, runner = ladder_setup(tmp_path)
+    out = tmp_path / "g.jsonl"
+    grid.grid(sp, runner, out, workers=2, log=None)
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    assert rows and all(r["scoring"] == "ladder" and r["c_star"] is None for r in rows)
+    ok = [r for r in rows if r["score"] is not None]
+    assert ok and all("best_rounded" in r for r in ok)
+
+
+def test_grid_probe_rows_unchanged(setup):
+    sp, runner, tmp = setup
+    out = tmp / "grid.jsonl"
+    grid.grid(sp, runner, out, workers=2, log=None)
+    row = json.loads(out.read_text().splitlines()[0])
+    assert set(row) == {"decision", "config", "score", "c_star", "c_use", "tps_per_gpu", "runs", "diagnostics"}
+
+
+def test_rescore_heldout_on_a_ladder_space(tmp_path):
+    sp, runner = ladder_setup(tmp_path)
+    out = analyze.rescore_heldout([sp.default_config()], runner, seeds=(1, 2))
+    assert out[0]["failures"] == 0 and all(s is not None and s < 0 for s in out[0]["scores"])

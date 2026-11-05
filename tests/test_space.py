@@ -94,3 +94,75 @@ def test_space_hash_is_content_not_bytes(tmp_path):
     assert space_hash(KnobSpace(replace(sp.scenario, gpu_budget=8), sp.knobs)) != h
     assert space_hash(KnobSpace(sp.scenario, tuple(replace(k, default=k.values[-1]) if k.name == "tp" else k
                                                    for k in sp.knobs))) != h
+
+
+def _ladder_yaml(tmp_path, **extra):
+    import yaml
+    raw = yaml.safe_load(TINY.read_text())
+    raw["scenario"].update(extra)
+    p = tmp_path / "s.yaml"
+    p.write_text(yaml.safe_dump(raw))
+    return p
+
+
+def test_ladder_fields_load(tmp_path):
+    sc = load_space(_ladder_yaml(tmp_path, scoring="ladder", concurrency=[64, 256, 1024, 2048],
+                                 early_stop=False)).scenario
+    assert sc.scoring == "ladder" and sc.concurrency == (64, 256, 1024, 2048) and sc.early_stop is False
+    hash(sc.concurrency)  # a tuple, not a list
+    assert Slo(e2e_p99_ms=5000).passes({"itl_p99_ms": 1, "e2e_p99_ms": 4000})
+    assert not Slo(e2e_p99_ms=5000).passes({"itl_p99_ms": 1, "e2e_p99_ms": 6000})
+    assert not Slo(e2e_p99_ms=5000).passes({"itl_p99_ms": 1})
+
+
+def test_ladder_needs_concurrency(tmp_path):
+    with pytest.raises(ValueError, match="concurrency"):
+        load_space(_ladder_yaml(tmp_path, scoring="ladder"))
+
+
+@pytest.mark.parametrize("conc", [[256, 64], [64, 64], [0, 64], [-1, 64], [1.5, 64], [], [True, 64]])
+def test_ladder_concurrency_must_be_ascending(tmp_path, conc):
+    with pytest.raises(ValueError, match="concurrency"):
+        load_space(_ladder_yaml(tmp_path, scoring="ladder", concurrency=conc))
+
+
+def test_concurrency_with_probe_refused(tmp_path):
+    with pytest.raises(ValueError, match="ambiguous"):
+        load_space(_ladder_yaml(tmp_path, concurrency=[64, 256]))
+
+
+def test_unknown_scoring_refused(tmp_path):
+    with pytest.raises(ValueError, match="scoring"):
+        load_space(_ladder_yaml(tmp_path, scoring="sweep"))
+
+
+def test_hash_unchanged_by_defaults():
+    from config_forage.space import space_hash
+    from tests.test_stacks import ROOT, SPACE_HASHES
+    for name, h in SPACE_HASHES.items():
+        assert space_hash(load_space(ROOT / name)) == h
+
+
+def test_ladder_fields_change_hash(tmp_path):
+    from config_forage.space import space_hash
+    base = space_hash(load_space(TINY))
+    assert space_hash(load_space(_ladder_yaml(tmp_path, scoring="ladder", concurrency=[64, 256]))) != base
+    assert space_hash(load_space(_ladder_yaml(tmp_path, scoring="ladder", concurrency=[64, 256], early_stop=False))) != base
+    assert space_hash(load_space(_ladder_yaml(tmp_path, slo={"itl_p99_ms": 20, "e2e_p99_ms": 9000}))) != base
+
+
+def test_throughput_per_gpu_slo_refused(tmp_path):
+    with pytest.raises(ValueError, match="slo.throughput_per_gpu is not supported"):
+        load_space(_ladder_yaml(tmp_path, slo={"itl_p99_ms": 20, "throughput_per_gpu": 5}))
+
+
+@pytest.mark.parametrize("v", ["false", 0, 1, None])
+def test_early_stop_must_be_bool(tmp_path, v):
+    with pytest.raises(ValueError, match="early_stop must be a bool"):
+        load_space(_ladder_yaml(tmp_path, scoring="ladder", concurrency=[64, 256], early_stop=v))
+
+
+def test_early_stop_with_probe_refused(tmp_path):
+    # the default (true) is indistinguishable from absent, so only a non-default value is caught
+    with pytest.raises(ValueError, match="early_stop with scoring 'probe'"):
+        load_space(_ladder_yaml(tmp_path, early_stop=False))

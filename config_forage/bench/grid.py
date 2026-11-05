@@ -16,9 +16,10 @@ from pathlib import Path
 
 import config_forage.bench as _pkg
 from config_forage.bench.analyze import load_grid
-from config_forage.blis.runner import PINS, BlisEnv, CachedRunner, engine_contract, run_batch
+from config_forage.blis.runner import BlisEnv, CachedRunner, engine_contract, run_batch
+from config_forage.blis.stacks import stack_of
 from config_forage.feasibility import enumerate_feasible
-from config_forage.probe import probe
+from config_forage.probe import score_config
 from config_forage.space import KnobSpace, load_space, space_hash
 
 
@@ -36,7 +37,7 @@ def _check_meta(space: KnobSpace, out: Path, rows: int) -> dict:
     """The sidecar to write for this call; raise if an existing grid's sidecar differs in space_hash,
     pins or engine-key contract (an old sidecar lacks the field: its rows predate the keys, refused
     then), or is missing while the grid has rows. git_sha is not checked."""
-    want = {"space_hash": space_hash(space), "pins": list(PINS), **engine_contract(space)}
+    want = {"space_hash": space_hash(space), "pins": list(stack_of(space.scenario).pins), **engine_contract(space)}
     mp, have = meta_path(out), {}
     if mp.exists():
         have = json.loads(mp.read_text())
@@ -70,9 +71,12 @@ def grid(space: KnobSpace, runner, out: Path, workers: int | None = None, log=sy
         if out.stat().st_size and not out.read_bytes().endswith(b"\n"):
             f.write("\n")  # end a line cut short by a kill before appending
         def one(d):
-            p = probe(runner, space.config(d), runner.scenario)
+            p = score_config(runner, space.config(d), runner.scenario)
             row = {"decision": list(d), "config": space.config(d), "score": p.score, "c_star": p.c_star,
                    "c_use": p.c_use, "tps_per_gpu": p.tps_per_gpu, "runs": p.runs, "diagnostics": p.diagnostics}
+            if runner.scenario.scoring == "ladder":  # probe rows keep exactly their old keys
+                row["scoring"] = "ladder"
+                row["best_rounded"] = p.diagnostics.get("best_rounded")
             with lock:
                 f.write(json.dumps(row, default=str) + "\n")
                 f.flush()

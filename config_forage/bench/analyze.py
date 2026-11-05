@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-from config_forage.probe import probe
+from config_forage.probe import score_config
 from config_forage.search.base import Trace, TracePoint
 
 BUDGETS = (50, 100, 200, 500, 1000)
@@ -148,7 +148,7 @@ def rescore_heldout(top_configs: Sequence[dict], runner, seeds: Sequence[int] = 
     (None if none) and `failures` the count of failed seeds."""
     out = []
     for cfg in top_configs:
-        scores = [probe(runner, cfg, runner.scenario, s).score for s in seeds]
+        scores = [score_config(runner, cfg, runner.scenario, s).score for s in seeds]
         ok = [s for s in scores if s is not None]
         out.append({"config": cfg, "scores": scores,
                     "mean": float(np.mean([0.0 if s is None else s for s in scores])),

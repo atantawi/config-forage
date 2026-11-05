@@ -43,6 +43,22 @@ def test_wrong_or_unknown_grid_is_refused(tmp_path, meta, msg):
         bsa_sweep.check_grid(SPACE, _grid(tmp_path, meta))
 
 
+def test_v015_grid_is_checked_against_its_own_stack(tmp_path):
+    """A v0.15.0 space's grid carries the v0.15.0 pins (cf-grid writes stack_of(...).pins): it is accepted,
+    and a sidecar with the v0.14.0 pins is refused for it, as is a v0.15.0 sidecar for a v0.14.0 space."""
+    from dataclasses import replace
+
+    from config_forage.blis.stacks import STACKS
+    from config_forage.space import KnobSpace
+    v15 = KnobSpace(replace(SPACE.scenario, stack="v0.15.0", engine_version="0.32.0"), SPACE.knobs)
+    pins15 = list(STACKS["v0.15.0"].pins)
+    assert len(bsa_sweep.check_grid(v15, _grid(tmp_path, {"space_hash": space_hash(v15), "pins": pins15}))) == len(ALL)
+    with pytest.raises(ValueError, match="pins"):
+        bsa_sweep.check_grid(v15, _grid(tmp_path, {"space_hash": space_hash(v15), "pins": list(PINS)}))
+    with pytest.raises(ValueError, match="pins"):
+        bsa_sweep.check_grid(SPACE, _grid(tmp_path, {"space_hash": space_hash(SPACE), "pins": pins15}))
+
+
 def test_interrupted_grid_is_refused(tmp_path):
     """cf-grid writes the sidecar before probing, so a killed grid has valid metadata but few rows."""
     with pytest.raises(ValueError, match=f"{len(ALL) - 1} of the space's {len(ALL)} feasible decisions missing"):

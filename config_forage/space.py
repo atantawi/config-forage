@@ -20,10 +20,12 @@ from config_forage.bsa.space import Axis, Decision, DecisionSpace
 class Slo:
     itl_p99_ms: float = 20.0
     ttft_p99_ms: float | None = None
+    e2e_p99_ms: float | None = None
 
     def passes(self, metrics: dict) -> bool:
         """All required p99 metrics are present and within bound; a missing metric fails."""
-        for key, bound in (("itl_p99_ms", self.itl_p99_ms), ("ttft_p99_ms", self.ttft_p99_ms)):
+        for key, bound in (("itl_p99_ms", self.itl_p99_ms), ("ttft_p99_ms", self.ttft_p99_ms),
+                           ("e2e_p99_ms", self.e2e_p99_ms)):
             if bound is not None and not (metrics.get(key) is not None and metrics[key] <= bound):
                 return False
         return True
@@ -41,6 +43,32 @@ class Scenario:
     seed: int = 0
     num_requests_base: int = 80
     model_entry: dict = field(default_factory=dict)  # arch (MoE|dense), heads_kv, min_footprint (tp·dp floor); absent = dense
+    stack: str | None = None  # BLIS stack (config_forage.blis.stacks); absent = v0.14.0
+    scoring: str = "probe"  # "probe" (C* probe) | "ladder" (concurrency ladder)
+    concurrency: tuple[int, ...] | None = None  # ladder rungs, strictly ascending; ladder only
+    early_stop: bool = True
+
+    def __post_init__(self):
+        if self.scoring not in ("probe", "ladder"):
+            raise ValueError(f"scoring {self.scoring!r} must be 'probe' or 'ladder'")
+        if not isinstance(self.early_stop, bool):
+            raise ValueError(f"early_stop must be a bool, got {self.early_stop!r}")
+        if self.scoring == "probe" and self.early_stop is not True:
+            raise ValueError("early_stop with scoring 'probe' has no effect: set scoring: ladder "
+                             "to use it, or drop early_stop")
+        if self.concurrency is not None:
+            if isinstance(self.concurrency, (str, bytes)) or not hasattr(self.concurrency, "__iter__"):
+                raise ValueError(f"concurrency must be a list of ints, got {self.concurrency!r}")
+            object.__setattr__(self, "concurrency", tuple(self.concurrency))
+            if self.scoring == "probe":
+                raise ValueError("concurrency with scoring 'probe' is ambiguous: set scoring: ladder "
+                                 "to use it, or drop concurrency")
+        if self.scoring == "ladder":
+            c = self.concurrency
+            if not c:
+                raise ValueError("scoring 'ladder' requires a non-empty concurrency list")
+            if not all(type(x) is int and x > 0 for x in c) or any(a >= b for a, b in zip(c, c[1:])):
+                raise ValueError(f"concurrency must be strictly ascending positive ints, got {list(c)}")
 
 
 @dataclass(frozen=True)
@@ -152,14 +180,25 @@ def space_hash(space: KnobSpace) -> str:
     """sha256 of the canonical JSON of the parsed scenario and knobs (names, values, requires,
     defaults, order): what a space means, not its file bytes, so comments and whitespace do not
     change it. cf-bench and cf-grid store it and refuse to resume into results of another space."""
-    payload = {"scenario": asdict(space.scenario), "knobs": [asdict(k) for k in space.knobs]}
+    scenario = asdict(space.scenario)
+    if scenario.get("stack") is None:  # a space without a stack hashes as it did before the field
+        scenario.pop("stack", None)
+    for name, default in (("scoring", "probe"), ("concurrency", None), ("early_stop", True)):
+        if scenario.get(name) == default:  # likewise for the ladder fields at their defaults
+            scenario.pop(name, None)
+    if scenario["slo"].get("e2e_p99_ms") is None:
+        scenario["slo"].pop("e2e_p99_ms", None)
+    payload = {"scenario": scenario, "knobs": [asdict(k) for k in space.knobs]}
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
 def load_space(path: str | Path) -> KnobSpace:
     raw = yaml.safe_load(Path(path).read_text())
     s = dict(raw["scenario"])
-    s["slo"] = Slo(**s.get("slo", {}))
+    slo = s.get("slo", {}) or {}
+    if "throughput_per_gpu" in slo:
+        raise ValueError("slo.throughput_per_gpu is not supported")
+    s["slo"] = Slo(**slo)
     knobs = tuple(Knob(k["name"], tuple(k["values"]),
                        (k["requires"][0], tuple(k["requires"][1])) if k.get("requires") else None,
                        k.get("default")) for k in raw["knobs"])

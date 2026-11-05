@@ -2,8 +2,9 @@
 
 Layout: OUT/<arm>/seed-<k>.json (Trace JSON) and OUT/manifest.json; existing traces are skipped.
 A resumed call must use the same space (manifest["space_hash"], see space.space_hash), BLIS pins
-(manifest["pins"] = runner.PINS), engine-key contract (manifest["engine_keys"], present only for a
-space using a later-accepted engine key: runner.engine_contract), budget and options. The code
+(manifest["pins"] = the space's stack pins, stacks.stack_of(space.scenario).pins), engine-key
+contract (manifest["engine_keys"], present only for a space using a later-accepted engine key:
+runner.engine_contract), budget and options. The code
 revision may differ: each trace records extra["provenance"] = {git_sha, dirty, pins} of the call that wrote it, manifest["git_sha"] stays that of
 the first call, and manifest["calls"] logs each call's git_sha, dirty, arms, seeds, time, new traces,
 unique BLIS runs, cache hits and timeouts. manifest["active_rules"] holds the rules each diagnostic arm
@@ -22,7 +23,8 @@ from pathlib import Path
 
 import config_forage.bench as _pkg
 from config_forage.biasers import DEFAULT_RULES, DiagnosticBiaser, TransferPrior
-from config_forage.blis.runner import PINS, BlisEnv, CachedRunner, engine_contract
+from config_forage.blis.runner import BlisEnv, CachedRunner, engine_contract
+from config_forage.blis.stacks import stack_of
 from config_forage.feasibility import FeasibilityBiaser
 from config_forage.probe import Objective
 from config_forage.search.base import Searcher, Trace
@@ -96,14 +98,15 @@ def bench(space: KnobSpace, runner, arms: list[str], seeds: list[int], budget: i
     if jobs > 1 and opts.get("workers") is None:  # keep jobs x workers threads near the core count
         opts["workers"] = max(1, ((os.cpu_count() or 2) - 1) // jobs)
     mpath, old, sh = out / "manifest.json", {}, space_hash(space)
+    pins = list(stack_of(space.scenario).pins)
     if mpath.exists():
         old = json.loads(mpath.read_text())
         if old.get("space_hash") != sh:
             raise ValueError(f"{out} holds runs of space_hash {old.get('space_hash')}, not this space's {sh} "
                              f"(the space changed, or the manifest predates space hashing); use another --out")
-        if old.get("pins") != list(PINS):
+        if old.get("pins") != pins:
             raise ValueError(f"{out} holds runs made with BLIS pins {old.get('pins')}, not this stack's "
-                             f"{list(PINS)}; resuming would mix simulator versions, so use a fresh --out")
+                             f"{pins}; resuming would mix simulator versions, so use a fresh --out")
         contract = engine_contract(space).get("engine_keys")
         if old.get("engine_keys") != contract:
             raise ValueError(f"{out} holds runs made under engine_keys contract {old.get('engine_keys')}, "
@@ -129,9 +132,9 @@ def bench(space: KnobSpace, runner, arms: list[str], seeds: list[int], budget: i
     if old.get("active_rules"):
         active.update({a: r for a, r in old["active_rules"].items() if a not in active})
     git = _pkg.git_state()
-    prov = {**git, "pins": list(PINS)}
+    prov = {**git, "pins": pins}
     manifest = {"space": space_path, "space_hash": sh, "budget": budget, "arms": all_arms, "seeds": all_seeds,
-                "pins": list(PINS), **engine_contract(space),
+                "pins": pins, **engine_contract(space),
                 "git_sha": old.get("git_sha") if old else git["git_sha"],  # the first call's
                 "jobs": jobs, "workers": opts.get("workers"),
                 "opts": {k: str(v) for k, v in opts.items() if k != "workers"}, "active_rules": active,
