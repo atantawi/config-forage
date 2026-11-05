@@ -27,14 +27,21 @@ uv run pytest -q          # unit tests; the BLIS-marked tests skip without BLIS
 
 ## BLIS setup
 
-The pinned stack is inference-sim v0.14.0 (`f2ba6bb`, latency kernel v0.4.0, blis-vllm v0.32.0),
-blis-catalog 0.3.0 and blis-registry v0.2.0. Spaces run `engine_version: "0.29.0"`. Go ≥ 1.27.2 is
+Two stacks are pinned (`config_forage/blis/stacks.py`). v0.14.0 is inference-sim v0.14.0 (`f2ba6bb`,
+latency kernel v0.4.0, blis-vllm v0.32.0), blis-catalog 0.3.0 and blis-registry v0.2.0, with
+`engine_version: "0.29.0"`. Every existing space runs on it. v0.15.0 is inference-sim v0.15.0
+(`762f160`, kernel v0.5.0, blis-vllm v0.32.0-blis.1), blis-catalog 0.5.0 and blis-registry v0.3.0,
+with `engine_version: "0.32.0"`. A space must state its stack's engine version. Go ≥ 1.27.2 is
 required to build the simulator. Results from the earlier v0.10.0 stack (S-mid v2, `results/s-mid3`)
 are kept as an archive. Their cache keys carry the old pins, so they never mix with new runs.
 
 ```sh
-scripts/setup_blis.sh ../blis-stack     # clones, verifies the pinned commits, builds; idempotent
+scripts/setup_blis.sh ../blis-stack-v014 v0.14.0   # clones, verifies the pinned commits, builds; idempotent
+scripts/setup_blis.sh ../blis-stack-v015           # BLIS v0.15.0 (the script's default), for a space with stack: v0.15.0
 ```
+
+A space runs on the stack its `stack:` field names (absent: v0.14.0), and the runner refuses a
+`BLIS_BIN` built from another commit, or a catalog or registry at another tag.
 
 It ends by printing four exports; set them in your shell:
 
@@ -108,7 +115,31 @@ configures. A space states it with flat knobs (`config_forage/router.py`):
 The runner writes the resulting config next to the scenario. The cache key covers that config, not
 just the knob values. `routing_policy`, `routing_scorers` and `admission_policy` are refused.
 
+## Ladder scoring
+
+A space may set `scoring: ladder` and `concurrency: [c1, c2, ...]` (strictly ascending) in its scenario
+(example: `spaces/examples/ladder-example.yaml`, v0.15.0, kimi-k2.5 on H200). Scoring is the default
+`probe` otherwise. The ladder differs from the probe:
+
+- There is no C* search and no headroom: the config runs at each rung in order.
+- A rung is servable if its SLOs hold on the worst instance (the max of the aggregate and every
+  instance's p99). ITL is divided by the acceptance length when speculative decoding reports one;
+  `ttft_p99_ms` and `e2e_p99_ms` are caps on top of it.
+- With `early_stop` (default true) the climb stops at the first unservable rung (with no SLO declared,
+  when rounded tok/s/GPU falls below the previous rung's); skipped rungs are in `diagnostics["skipped"]`.
+- There is no shed guard (the probe keeps its own): a rung that sheds requests is judged on its metrics.
+- The score is minus the best servable exact tok/s per GPU over the rungs; the value rounded as
+  reported is in `diagnostics["best_rounded"]`. A config with no servable rung scores None.
+- `c_star` is None. The budget unit is the rungs run (distinct cache keys), as for the probe.
+
+`cf-grid` rows of a ladder space add `scoring` and `best_rounded`; a probe space's rows keep their keys.
+
+Earlier results are v0.14.0 and probe-scored. The glm-5.3 models do not run on engine
+0.32.0, so a v0.15.0 space needs another model (e.g. kimi-k2.5).
+
 ## Objective and budget unit
+
+The default probe works as follows.
 
 A config is probed by raising the concurrency c (upstream's ladder, then doubling up to 4096) until
 the SLO (p99 ITL, plus p99 TTFT if set) fails, then bisecting to C*, the largest passing

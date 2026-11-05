@@ -41,6 +41,14 @@ def test_preset_shape(catalog):
     assert workloads.shape("multidoc", catalog)["prefix_tokens"] == 0  # absent = no shared prefix
 
 
+def test_comments_inside_a_side_are_ignored(catalog):
+    """catalog 0.5.0's sharegpt states a _comment in prompt and output (provenance of each figure)."""
+    (catalog / "workloads" / "noted.yaml").write_text(
+        'prompt: {_comment: "measured", tokens: 256, tokens_stdev: 100, tokens_min: 2, tokens_max: 800}\n'
+        'output: {_comment: "measured", tokens: 256, tokens_stdev: 100, tokens_min: 1, tokens_max: 1024}\n')
+    assert workloads.shape("noted", catalog) == workloads.shape("chatbot", catalog)
+
+
 def test_distribution_needs_no_catalog():
     assert workloads.shape("distribution", None) is workloads.DISTRIBUTION_SHAPE
 

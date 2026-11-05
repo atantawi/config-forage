@@ -1,16 +1,28 @@
 #!/usr/bin/env bash
-# Clone and build the pinned BLIS stack (upstream blis-config-search SETUP.md §1–2) into DEST. Go >= 1.27.2.
+# Clone and build a pinned BLIS stack (upstream blis-config-search SETUP.md §1–2) into DEST. Go >= 1.27.2.
+# STACK is v0.15.0 (the default) or v0.14.0; its pins must match config_forage/blis/stacks.py, which
+# CachedRunner checks the binary and checkouts against (runner.check_binary). Use one DEST per stack.
 # Idempotent: existing clones are kept (not re-cloned) but their commits are still verified;
 # the binary is built if missing or older than the checkout's Go sources. Prints the four BLIS_* exports on success.
 #
-#   scripts/setup_blis.sh ../blis-stack
+#   scripts/setup_blis.sh ../blis-stack-v015            # v0.15.0
+#   scripts/setup_blis.sh ../blis-stack-v014 v0.14.0    # replay v0.14.0 results
 set -euo pipefail
 
-DEST=${1:?usage: setup_blis.sh DEST}
-SIM_TAG=v0.14.0
-SIM_SHA=f2ba6bb1c189ed5a56933cfa3d0927eae3836ee9   # release v0.14.0 (kernel v0.4.0, blis-vllm v0.32.0 in go.mod)
-CATALOG_TAG=0.3.0                                   # the release's documented compatible catalog
-REGISTRY_TAG=v0.2.0                                 # carries cost-model-memory (v0.1.1 or later)
+DEST=${1:?usage: setup_blis.sh DEST [v0.14.0|v0.15.0]}
+STACK=${2:-v0.15.0}
+case "$STACK" in
+  v0.14.0)
+    SIM_SHA=f2ba6bb1c189ed5a56933cfa3d0927eae3836ee9   # release v0.14.0 (kernel v0.4.0, blis-vllm v0.32.0 in go.mod)
+    CATALOG_TAG=0.3.0                                   # the release's documented compatible catalog
+    REGISTRY_TAG=v0.2.0 ;;                              # carries cost-model-memory (v0.1.1 or later)
+  v0.15.0)
+    SIM_SHA=762f1605ff27cd825d6b2cb2d9e991cd4b864c91   # release v0.15.0 (kernel v0.5.0, blis-vllm v0.32.0-blis.1)
+    CATALOG_TAG=0.5.0
+    REGISTRY_TAG=v0.3.0 ;;                              # carries cost-model-fabric
+  *) echo "unknown stack $STACK; expected v0.14.0 or v0.15.0" >&2; exit 2 ;;
+esac
+SIM_TAG=$STACK
 GH=https://github.com/inference-sim
 
 mkdir -p "$DEST"

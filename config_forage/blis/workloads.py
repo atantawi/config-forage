@@ -3,11 +3,11 @@
 BLIS ignores `--workload` in concurrency mode: `blis run --concurrency` synthesizes requests from
 the `--prompt-tokens*` / `--output-tokens*` / `--prefix-tokens` flags, whose defaults are a 512/512
 "distribution" workload, and reads a named preset only in rate mode (inference-sim v0.14.0
-cmd/root.go:946-969; v0.10.0 has the same branch order). The probe always runs closed-loop, so a
+cmd/root.go:946-969, v0.15.0 cmd/root.go:951-990; v0.10.0 has the same branch order). The probe always runs closed-loop, so a
 named preset must be passed as those flags. A shape is that flag set; it also enters the cache key,
 so a run is cached under the distribution it ran, not under the name it was given.
 
-`distribution` is BLIS's flag defaults (cmd/root.go:39-46). Any other name is read from
+`distribution` is BLIS's flag defaults (v0.14.0 cmd/root.go:39-46, v0.15.0 cmd/root.go:42-49; same values). Any other name is read from
 <catalog>/workloads/<name>.yaml with the keys BLIS's preset reader accepts; a replay workload
 (top-level `replay:`) is refused, as it has no shape."""
 
@@ -18,7 +18,7 @@ from pathlib import Path
 import yaml
 
 DISTRIBUTION = "distribution"
-# BLIS v0.14.0 flag defaults (cmd/root.go:39-46): what every concurrency-mode run drew from before
+# BLIS flag defaults (v0.14.0 cmd/root.go:39-46, v0.15.0 cmd/root.go:42-49; unchanged): what every concurrency-mode run drew from before
 DISTRIBUTION_SHAPE = {"prefix_tokens": 0,
                       "prompt": {"tokens": 512, "tokens_stdev": 256, "tokens_min": 2, "tokens_max": 7000},
                       "output": {"tokens": 512, "tokens_stdev": 256, "tokens_min": 2, "tokens_max": 7000}}
@@ -45,7 +45,7 @@ def shape(name: str, catalog: str | Path | None) -> dict:
         raise ValueError(f"workload {name!r}: unknown keys {sorted(unknown)} in {path}")
     out = {"prefix_tokens": raw.get("prefix_tokens", 0)}
     for side in ("prompt", "output"):
-        d = raw.get(side) or {}
+        d = {k: v for k, v in (raw.get(side) or {}).items() if not str(k).startswith("_comment")}
         if set(d) != set(_SIDE_KEYS):
             raise ValueError(f"workload {name!r}: {side} must state exactly {list(_SIDE_KEYS)} ({path})")
         out[side] = dict(d)
@@ -57,7 +57,7 @@ def shape(name: str, catalog: str | Path | None) -> dict:
 
 def _bounds_problem(s: dict) -> str | None:
     """Why BLIS would refuse shape `s`, else None: the checks of its validateDistributionParams
-    (inference-sim v0.14.0 cmd/root.go:199-231) and --prefix-tokens >= 0 (cmd/root.go:904), so a
+    (inference-sim v0.14.0 cmd/root.go:199-231 and :904; v0.15.0 cmd/root.go:202 and :909), so a
     malformed preset is refused once, here, not by a failed BLIS run per candidate."""
     for side in ("prompt", "output"):
         for k in _SIDE_KEYS:

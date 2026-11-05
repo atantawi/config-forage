@@ -17,7 +17,7 @@ from config_forage.space import KnobSpace, Scenario, Slo
 
 C_CAP = 4096  # hard cap on the probed concurrency past the ladder top
 
-__all__ = ["C_CAP", "Slo", "ProbeResult", "ladder", "probe", "infeasible_result", "Objective"]
+__all__ = ["C_CAP", "Slo", "ProbeResult", "ladder", "probe", "infeasible_result", "score_config", "Objective"]
 
 
 @dataclass(frozen=True)
@@ -122,6 +122,15 @@ def infeasible_result(knobs: dict, scenario: Scenario, seed: int | None = None) 
     return ProbeResult(None, None, None, None, {}, diag, 1, frozenset([key]))
 
 
+def score_config(runner, config: dict, scenario: Scenario, seed: int | None = None) -> ProbeResult:
+    """Score one config the way the scenario says: the C* probe (scoring "probe") or the concurrency
+    ladder (scoring "ladder", config_forage.ladder.climb)."""
+    if scenario.scoring == "ladder":
+        from config_forage.ladder import climb  # ladder imports this module
+        return climb(runner, config, scenario, seed)
+    return probe(runner, config, scenario, seed)
+
+
 class Objective:
     """Decision -> ProbeResult; runs_used = distinct cache keys touched (hits included), thread-safe.
 
@@ -148,7 +157,7 @@ class Objective:
         d = self.space.canonical(d)
         knobs, sc = self.space.knob_values(d), self.runner.scenario
         if is_feasible(knobs, sc):
-            p = probe(self.runner, self.space.config(d), sc)
+            p = score_config(self.runner, self.space.config(d), sc)
         else:
             p = infeasible_result(knobs, sc)
         with self._lock:

@@ -2,11 +2,14 @@
 keys them; malformed values are refused before any run."""
 
 import os
+import re
+from dataclasses import replace
 
 import pytest
 
 from config_forage.blis import run_blis
-from config_forage.blis.runner import BlisEnv, CachedRunner, cache_key
+from config_forage.blis.runner import CachedRunner, cache_key
+from config_forage.blis.stacks import STACKS
 from config_forage.space import Scenario
 
 import subprocess as _subprocess
@@ -14,19 +17,24 @@ import subprocess as _subprocess
 _REAL_RUN = _subprocess.run
 EP = {"tp": 4, "dp": 2, "enable_expert_parallel": True}
 EPLB = {"enable_eplb": True, "num_redundant_experts": 32}
+# (engine_version, stack): each stack with its own engine release, for behaviour meant to match on both
+ON = pytest.mark.parametrize("ev, stack", [("0.29.0", STACKS["v0.14.0"]), ("0.32.0", STACKS["v0.15.0"])],
+                             ids=["v0.14.0", "v0.15.0"])
 
 
 @pytest.mark.parametrize("key, value", [("all2all_backend", "deepep_high_throughput"),
                                         ("long_prefill_token_threshold", 1024),
                                         ("cudagraph_mode", "FULL"),
                                         ("max_num_batched_tokens", 2048), ("max_num_seqs", 16)])
-def test_flat_engine_key_goes_to_engine(key, value):
-    parallel, engine, cli, router = run_blis.classify_config({**EP, key: value})
+@ON
+def test_flat_engine_key_goes_to_engine(key, value, ev, stack):
+    parallel, engine, cli, router = run_blis.classify_config({**EP, key: value}, ev, stack)
     assert engine[key] == value and key not in parallel and key not in cli and not router
 
 
-def test_eplb_block_goes_to_engine_as_a_mapping():
-    _, engine, _, _ = run_blis.classify_config({**EP, "eplb": EPLB})
+@ON
+def test_eplb_block_goes_to_engine_as_a_mapping(ev, stack):
+    _, engine, _, _ = run_blis.classify_config({**EP, "eplb": EPLB}, ev, stack)
     assert engine["eplb"] == EPLB
 
 
@@ -34,32 +42,40 @@ def test_eplb_block_goes_to_engine_as_a_mapping():
 def test_inert_eplb_fields_refused_with_the_measured_reason(field):
     with pytest.raises(run_blis.ConfigError, match=f"{field}.*inert in BLIS v0.14.0"):
         run_blis.classify_config({**EP, "eplb": {**EPLB, field: 1000}})
+    with pytest.raises(run_blis.ConfigError, match=f"{field}.*inert in BLIS v0.15.0"):
+        run_blis.classify_config({**EP, "eplb": {**EPLB, field: 1000}}, "0.32.0", STACKS["v0.15.0"])
 
 
 LEGAL = run_blis.ENGINE_RELEASES["0.29.0"]["all2all_backends"]
 
 
 @pytest.mark.parametrize("bad", ["deepep_ht", "DeepEP_V2", "", 3, None, True])
-def test_illegal_all2all_backend_refused_with_the_legal_list(bad):
-    with pytest.raises(run_blis.ConfigError, match=r"not accepted by engine 0\.29\.0; legal = .*deepep_v2"):
-        run_blis.classify_config({**EP, "all2all_backend": bad})
+@ON
+def test_illegal_all2all_backend_refused_with_the_legal_list(bad, ev, stack):
+    with pytest.raises(run_blis.ConfigError, match=rf"not accepted by engine {re.escape(ev)}; legal = .*deepep_v2"):
+        run_blis.classify_config({**EP, "all2all_backend": bad}, ev, stack)
 
 
 @pytest.mark.parametrize("ok", ["deepep_high_throughput", "deepep_low_latency", "deepep_v2", "nixl_ep"])
-def test_legal_all2all_backend_accepted(ok):
-    assert ok in LEGAL
-    assert run_blis.classify_config({**EP, "all2all_backend": ok})[1]["all2all_backend"] == ok
+@ON
+def test_legal_all2all_backend_accepted(ok, ev, stack):
+    assert ok in LEGAL and ok in run_blis.ENGINE_RELEASES[ev]["all2all_backends"]
+    assert run_blis.classify_config({**EP, "all2all_backend": ok}, ev, stack)[1]["all2all_backend"] == ok
+
+
+# a stack whose engine release has no ENGINE_RELEASES entry (a real stack refuses any other version)
+ODD = replace(STACKS["v0.14.0"], name="odd", engine_version="9.9.9")
 
 
 def test_all2all_backend_on_an_unknown_engine_version_refused():
     with pytest.raises(run_blis.ConfigError, match=r"no legal backend list for engine_version '9\.9\.9'"):
-        run_blis.classify_config({**EP, "all2all_backend": "deepep_v2"}, "9.9.9")
-    run_blis.classify_config({**EP}, "9.9.9")       # nothing to check without the key
+        run_blis.classify_config({**EP, "all2all_backend": "deepep_v2"}, "9.9.9", ODD)
+    run_blis.classify_config({**EP}, "9.9.9", ODD)       # nothing to check without the key
 
 
 def test_run_one_checks_against_its_engine_version(tmp_path):
     rec = run_blis.run_one("blis", None, None, str(tmp_path), "m", "h100", "9.9.9", None, 1, 0, None,
-                           {**EP, "all2all_backend": "deepep_v2"})
+                           {**EP, "all2all_backend": "deepep_v2"}, stack=ODD)
     assert rec["returncode"] is None and "no legal backend list" in rec["error"]
 
 
@@ -71,15 +87,17 @@ def test_run_one_checks_against_its_engine_version(tmp_path):
                                         ({"long_prefill_token_threshold": False}, "non-negative integer"),
                                         ({"long_prefill_token_threshold": -1}, "non-negative integer"),
                                         ({"long_prefill_token_threshold": 1024.0}, "non-negative integer")])
-def test_bad_long_prefill_token_threshold_refused(cfg, match):
+@ON
+def test_bad_long_prefill_token_threshold_refused(cfg, match, ev, stack):
     with pytest.raises(run_blis.ConfigError, match=match):
-        run_blis.classify_config({**EP, **cfg})
+        run_blis.classify_config({**EP, **cfg}, ev, stack)
 
 
 @pytest.mark.parametrize("cfg", [{"long_prefill_token_threshold": 32768},
                                  {"long_prefill_token_threshold": 4096, "max_model_len": 4096}])
-def test_long_prefill_token_threshold_at_max_model_len_accepted(cfg):
-    _, engine, _, _ = run_blis.classify_config({**EP, **cfg})
+@ON
+def test_long_prefill_token_threshold_at_max_model_len_accepted(cfg, ev, stack):
+    _, engine, _, _ = run_blis.classify_config({**EP, **cfg}, ev, stack)
     assert engine["long_prefill_token_threshold"] == cfg["long_prefill_token_threshold"]
 
 
@@ -121,10 +139,11 @@ def test_malformed_no_op_block_is_still_refused(tmp_path):
     assert rec["returncode"] is None and "bogus" in rec["error"]
 
 
-def test_priced_values_are_not_normalised():
+@ON
+def test_priced_values_are_not_normalised(ev, stack):
     for cfg in ({"eplb": {"enable_eplb": True}}, {"eplb": EPLB}, {"all2all_backend": "deepep_v2"},
                 {"long_prefill_token_threshold": 64}):
-        assert run_blis.canonical_config({**BASE, **cfg}) == {**BASE, **cfg}
+        assert run_blis.canonical_config({**BASE, **cfg}, ev, stack) == {**BASE, **cfg}
 
 
 def test_eplb_key_order_does_not_change_the_cache_key():
@@ -140,32 +159,37 @@ def test_eplb_key_order_does_not_change_the_cache_key():
                                         ({**EPLB, "num_redundant_experts": -1}, "num_redundant_experts"),
                                         ({**EPLB, "num_redundant_experts": True}, "num_redundant_experts"),
                                         ({**EPLB, "num_redundant_experts": "32"}, "num_redundant_experts")])
-def test_malformed_eplb_block_refused(bad, match):
+@ON
+def test_malformed_eplb_block_refused(bad, match, ev, stack):
     with pytest.raises(run_blis.ConfigError, match=match):
-        run_blis.classify_config({**EP, "eplb": bad})
+        run_blis.classify_config({**EP, "eplb": bad}, ev, stack)
 
 
 @pytest.mark.parametrize("key", ["prefill_instances", "num_speculative_tokens", "routing_policy"])
-def test_still_unsupported_keys_refused_with_reason(key):
+@ON
+def test_still_unsupported_keys_refused_with_reason(key, ev, stack):
     with pytest.raises(run_blis.ConfigError, match=run_blis.UNSUPPORTED[key][:20]):
-        run_blis.classify_config({**EP, key: 1})
+        run_blis.classify_config({**EP, key: 1}, ev, stack)
 
 
-def test_unknown_key_lists_the_nested_blocks():
+@ON
+def test_unknown_key_lists_the_nested_blocks(ev, stack):
     with pytest.raises(run_blis.ConfigError, match="unknown key.*'eplb'"):
-        run_blis.classify_config({**EP, "no_such_knob": 1})
+        run_blis.classify_config({**EP, "no_such_knob": 1}, ev, stack)
 
 
-def test_scenario_writes_eplb_as_a_sub_block():
+@ON
+def test_scenario_writes_eplb_as_a_sub_block(ev, stack):
     parallel, engine, _, _ = run_blis.classify_config(
-        {**EP, "all2all_backend": "deepep_high_throughput", "eplb": EPLB})
-    y = run_blis.scenario_yaml("m", "h100", "0.29.0", parallel, engine, "n")
+        {**EP, "all2all_backend": "deepep_high_throughput", "eplb": EPLB}, ev, stack)
+    y = run_blis.scenario_yaml("m", "h100", ev, parallel, engine, "n", coefficients=stack.coefficients)
     assert '      all2all_backend: "deepep_high_throughput"\n' in y
     assert "      eplb:\n        enable_eplb: true\n        num_redundant_experts: 32\n" in y
 
 
-def test_new_keys_change_the_scenario_file_and_the_cache_key(tmp_path):
-    sc = Scenario("m", "h100", "chatbot", 8, "0.29.0")
+@ON
+def test_new_keys_change_the_scenario_file_and_the_cache_key(tmp_path, ev, stack):
+    sc = Scenario("m", "h100", "chatbot", 8, ev, stack=stack.name)
     base = {**EP, "num_instances": 1}
     variants = [base, {**base, "all2all_backend": "deepep_v2"}, {**base, "long_prefill_token_threshold": 64},
                 {**base, "eplb": {"enable_eplb": True}},
@@ -173,24 +197,31 @@ def test_new_keys_change_the_scenario_file_and_the_cache_key(tmp_path):
     keys, files = set(), set()
     for v in variants:
         keys.add(cache_key(v, 8, 0, sc))
-        parallel, engine, _, _ = run_blis.classify_config(v)
-        files.add(run_blis.write_scenario(tmp_path, "m", "h100", "0.29.0", parallel, engine))
+        parallel, engine, _, _ = run_blis.classify_config(v, ev, stack)
+        files.add(run_blis.write_scenario(tmp_path, "m", "h100", ev, parallel, engine,
+                                          coefficients=stack.coefficients))
     assert len(keys) == len(variants) and len(files) == len(variants)
 
 
+# glm-5.3-flash does not run on engine 0.32.0 (docs/experiments/v015-folds.md); kimi-k2.5 on H200 does,
+# with 8 redundant experts (32 leave no KV room) at gpu_memory_utilization 0.95
 @pytest.mark.blis
 @pytest.mark.skipif(not os.environ.get("BLIS_BIN"), reason="BLIS_BIN not set")
-def test_blis_prices_the_new_engine_keys(tmp_path, monkeypatch):
+@pytest.mark.parametrize("stack, sc, extra_base, eplb", [
+    ("v0.14.0", Scenario("glm-5.3-flash", "h100", "chatbot", 8, "0.29.0"), {}, EPLB),
+    ("v0.15.0", Scenario("kimi-k2.5", "h200", "chatbot", 8, "0.32.0", stack="v0.15.0"),
+     {"gpu_memory_utilization": 0.95}, {"enable_eplb": True, "num_redundant_experts": 8})])
+def test_blis_prices_the_new_engine_keys(tmp_path, monkeypatch, stack, sc, extra_base, eplb):
     """On an EP tp4*dp2 instance, each accepted key, set off its default, moves the metrics."""
-    monkeypatch.setattr(run_blis.subprocess, "run", _REAL_RUN)     # undo the _no_blis stub
-    env = BlisEnv.from_env()
+    from helpers import blis_env_for
+    monkeypatch.setattr(run_blis.subprocess, "run", _REAL_RUN)     # undo the _no_blis stub (and for check_binary)
+    env = blis_env_for(stack)
     env.scenarios_dir = tmp_path / "scenarios"
-    sc = Scenario("glm-5.3-flash", "h100", "chatbot", 8, "0.29.0")
     runner = CachedRunner(env, sc, tmp_path / "cache")
-    base = {**EP, "num_instances": 1, "quantization": "fp8", "cache_dtype": "fp8"}
+    base = {**EP, "num_instances": 1, "quantization": "fp8", "cache_dtype": "fp8", **extra_base}
     m = {}
     for name, extra in [("default", {}), ("a2a", {"all2all_backend": "deepep_high_throughput"}),
-                        ("lptt", {"long_prefill_token_threshold": 64}), ("eplb", {"eplb": EPLB})]:
+                        ("lptt", {"long_prefill_token_threshold": 64}), ("eplb", {"eplb": eplb})]:
         r = runner.run({**base, **extra}, 32)
         assert r["error"] is None, r.get("stderr_tail")
         m[name] = r["metrics"]
@@ -227,16 +258,17 @@ def _no_blis(monkeypatch):
                         lambda cmd, **kw: subprocess.CompletedProcess(cmd, 7, "", "stub"))
 
 
-def _run(tmp_path, catalog, model, config):
-    return run_blis.run_one("blis", catalog, "registry", str(tmp_path / "sc"), model, "h100", "0.29.0",
-                            None, 1, 0, None, config)
+def _run(tmp_path, catalog, model, config, ev="0.29.0", stack=STACKS["v0.14.0"]):
+    return run_blis.run_one("blis", catalog, "registry", str(tmp_path / "sc"), model, "h100", ev,
+                            None, 1, 0, None, config, stack=stack)
 
 
-def test_enabled_eplb_without_expert_parallel_refused():
+@ON
+def test_enabled_eplb_without_expert_parallel_refused(ev, stack):
     with pytest.raises(run_blis.ConfigError, match="eplb.*needs enable_expert_parallel"):
-        run_blis.classify_config({"tp": 8, "eplb": {"enable_eplb": True}})
+        run_blis.classify_config({"tp": 8, "eplb": {"enable_eplb": True}}, ev, stack)
     with pytest.raises(run_blis.ConfigError, match="eplb.*needs enable_expert_parallel"):
-        run_blis.classify_config({"tp": 8, "enable_expert_parallel": False, "eplb": EPLB})
+        run_blis.classify_config({"tp": 8, "enable_expert_parallel": False, "eplb": EPLB}, ev, stack)
 
 
 def test_model_experts_reads_the_largest_routed_count(tmp_path):
@@ -244,26 +276,29 @@ def test_model_experts_reads_the_largest_routed_count(tmp_path):
     assert run_blis.model_experts(_catalog(tmp_path / "d", "dense", "layer_kinds: []\n"), "dense") == 0
 
 
-def test_indivisible_eplb_layout_refused_with_the_numbers(tmp_path):
+@ON
+def test_indivisible_eplb_layout_refused_with_the_numbers(tmp_path, ev, stack):
     cat = _catalog(tmp_path, "moe", MOE_GRAPH)
-    rec = _run(tmp_path, cat, "moe", {**EP, "eplb": {"enable_eplb": True, "num_redundant_experts": 2}})
+    rec = _run(tmp_path, cat, "moe", {**EP, "eplb": {"enable_eplb": True, "num_redundant_experts": 2}}, ev, stack)
     assert rec["returncode"] is None and rec["cmd"] is None
     assert "60 experts + 2 redundant = 62" in rec["error"] and "width 8" in rec["error"]
-    rec = _run(tmp_path, cat, "moe", {**EP, "eplb": {"enable_eplb": True}})   # omitted = 0 redundant
+    rec = _run(tmp_path, cat, "moe", {**EP, "eplb": {"enable_eplb": True}}, ev, stack)   # omitted = 0 redundant
     assert "60 experts + 0 redundant = 60" in rec["error"]
 
 
-def test_divisible_eplb_layout_reaches_blis(tmp_path):
+@ON
+def test_divisible_eplb_layout_reaches_blis(tmp_path, ev, stack):
     cat = _catalog(tmp_path, "moe", MOE_GRAPH)
-    rec = _run(tmp_path, cat, "moe", {**EP, "eplb": {"enable_eplb": True, "num_redundant_experts": 4}})
+    rec = _run(tmp_path, cat, "moe", {**EP, "eplb": {"enable_eplb": True, "num_redundant_experts": 4}}, ev, stack)
     assert rec["cmd"] is not None and "experts" not in (rec["error"] or "")   # 64 % 8 == 0
 
 
 @pytest.mark.parametrize("why", ["dense", "no catalog", "no model entry"])
-def test_eplb_that_cannot_be_validated_is_refused(tmp_path, why):
+@ON
+def test_eplb_that_cannot_be_validated_is_refused(tmp_path, why, ev, stack):
     cat = {"dense": _catalog(tmp_path, "dense", "layer_kinds: []\n"), "no catalog": None,
            "no model entry": str(tmp_path)}[why]
-    rec = _run(tmp_path, cat, "dense", {**EP, "eplb": EPLB})
+    rec = _run(tmp_path, cat, "dense", {**EP, "eplb": EPLB}, ev, stack)
     assert rec["returncode"] is None and "eplb" in rec["error"] and "cannot validate" in rec["error"]
 
 

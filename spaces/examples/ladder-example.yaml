@@ -1,0 +1,25 @@
+# Example of ladder scoring on the v0.15.0 stack: kimi-k2.5 (MoE, 64 KV heads; catalog 0.5.0) on 64 H200s,
+# multidoc workload. A config is scored by running the concurrency rungs in order and keeping the best
+# servable tok/s/GPU (README, "Ladder scoring"); there is no C* probe and no headroom.
+# glm-5.3 models do not run on engine 0.32.0, so this space uses kimi-k2.5.
+scenario:
+  model: kimi-k2.5
+  hardware: h200
+  workload: multidoc
+  gpu_budget: 64
+  stack: v0.15.0
+  engine_version: "0.32.0"
+  slo: {itl_p99_ms: 50, ttft_p99_ms: 5000}
+  scoring: ladder
+  concurrency: [16, 64, 256]
+  seed: 0
+  # Measured on BLIS v0.15.0 (engine 0.32.0), expert parallel on, c = 16: tp·dp = 8 runs (tp8 and tp4·dp2);
+  # tp4 dp1 (width 4) is refused (no room for KV: 138.8 GiB fixed occupancy per rank on a 139.8 GiB H200);
+  # tp2 is refused (per-rank occupancy above the device). The checkpoint is a compressed-tensors int4
+  # pack-quantized one, so no quantization knob is set: the checkpoint governs.
+  model_entry: {arch: MoE, heads_kv: 64, min_footprint: 8}
+knobs:
+  - {name: tp, values: [4, 8, 16], default: 8}
+  - {name: dp, values: [1, 2, 4], default: 1}
+  - {name: enable_expert_parallel, values: [false, true], default: true}
+  - {name: max_num_seqs, values: [64, 128, 256], default: 128}

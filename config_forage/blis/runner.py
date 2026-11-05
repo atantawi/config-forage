@@ -7,6 +7,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
+import sys
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -16,16 +18,16 @@ from typing import TypeVar
 
 from config_forage import router
 from config_forage.blis import run_blis, workloads
+from config_forage.blis.stacks import DEFAULT_STACK, STACKS, Stack, stack_of
 from config_forage.space import Scenario
 
 T = TypeVar("T")
 R = TypeVar("R")
 
-# The last entry is the runner's workload contract, not a BLIS pin: runs before it passed --workload,
-# which closed-loop BLIS ignores (they all drew from workloads.DISTRIBUTION_SHAPE), so cf-bench and
-# cf-grid refuse to resume into their results.
-PINS = ("inference-sim v0.14.0 f2ba6bb1c189ed5a56933cfa3d0927eae3836ee9", "kernel v0.4.0",
-        "blis-vllm v0.32.0", "catalog 0.3.0", "registry v0.2.0", "workload as token-shape flags")
+# Back-compat alias; the runner's workload contract (the last pin) is explained in stacks.py.
+# The last pin is the workload contract: runs before it passed --workload, which closed-loop BLIS
+# ignored (they all drew from workloads.DISTRIBUTION_SHAPE), so cf-bench and cf-grid refuse to resume into them.
+PINS = STACKS[DEFAULT_STACK].pins
 
 
 # Engine keys accepted from contract 2 on. A config using one was refused (an error row, cached)
@@ -62,6 +64,36 @@ class BlisEnv:
                    Path(e["BLIS_SCENARIOS"]))
 
 
+def _git(d: Path, *args: str) -> str | None:
+    """`git -C d args` stdout stripped, or None when it fails (not a checkout, no exact tag)."""
+    try:
+        r = subprocess.run(["git", "-C", str(d), *args], capture_output=True, text=True, timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def check_binary(env: BlisEnv, stack: Stack) -> None:
+    """Refuse a BLIS stack other than `stack`: when the binary sits in an inference-sim checkout
+    (main.go beside it), its HEAD must be stack.sim_sha and the catalog and registry checkouts must be
+    exactly at stack.catalog_tag and stack.registry_tag; else ValueError, before any run is keyed
+    under the stack's pins. A binary outside a checkout cannot be checked: warn on stderr."""
+    sim = Path(env.blis).parent
+    if not (sim / "main.go").exists():
+        print(f"config-forage: warning: {env.blis} is not inside an inference-sim checkout; cannot check "
+              f"it is stack {stack.name} ({stack.sim_sha})", file=sys.stderr)
+        return
+    head = _git(sim, "rev-parse", "HEAD")
+    if head != stack.sim_sha:
+        raise ValueError(f"{env.blis} is built from inference-sim {head}, not stack {stack.name}'s "
+                         f"{stack.sim_sha}; point BLIS_BIN at that stack's binary")
+    for what, d, tag in (("catalog", env.catalog, stack.catalog_tag), ("registry", env.registry, stack.registry_tag)):
+        have = _git(Path(d), "describe", "--tags", "--exact-match")
+        if have != tag:
+            raise ValueError(f"{what} {d} is at {have or 'no exact tag'}, not stack {stack.name}'s {tag}; "
+                             f"point BLIS_{what.upper()} at that stack's checkout")
+
+
 def cache_key(config: dict, concurrency: int, seed: int, scenario: Scenario, shape: dict | None = None) -> str:
     """`shape` is the workload's token distribution (workloads.shape), keyed so a run is cached under
     what it drew from. Keys written before it existed (no "shape") are for runs that all drew from
@@ -71,7 +103,7 @@ def cache_key(config: dict, concurrency: int, seed: int, scenario: Scenario, sha
     payload = {"config": config, "concurrency": concurrency, "seed": seed, "workload": scenario.workload,
                "num_requests": requests_for(concurrency, scenario.num_requests_base),
                "model": scenario.model, "hardware": scenario.hardware,
-               "engine_version": scenario.engine_version, "pins": PINS}
+               "engine_version": scenario.engine_version, "pins": stack_of(scenario).pins}
     if shape is not None:
         payload["shape"] = shape
     if any(k in config for k in ENGINE_KEYS_V2):
@@ -81,9 +113,16 @@ def cache_key(config: dict, concurrency: int, seed: int, scenario: Scenario, sha
 
 class CachedRunner:
     def __init__(self, env: BlisEnv | None, scenario: Scenario, cache_dir: Path, run_fn: Callable | None = None):
-        """With an env, the scenario's workload is resolved to its shape here, so an unknown or replay
+        """The scenario's engine_version must be its stack's (ValueError). With an env, the binary and checkouts are checked against the scenario's stack
+        (check_binary) and the workload is resolved to its shape here, so an unknown or replay
         workload is refused before any run. Without one (a test double), the shape is not keyed."""
         self.env, self.scenario, self.cache_dir = env, scenario, Path(cache_dir)
+        self.stack = stack_of(scenario)
+        if scenario.engine_version != self.stack.engine_version:
+            raise ValueError(f"scenario engine_version {scenario.engine_version!r} is not stack "
+                             f"{self.stack.name}'s {self.stack.engine_version!r}; a stack runs one engine release")
+        if env is not None:
+            check_binary(env, self.stack)
         self.shape = workloads.shape(scenario.workload, env.catalog) if env is not None else None
         self.run_fn = run_fn or self._blis_run
         self.unique_runs = 0
@@ -96,7 +135,8 @@ class CachedRunner:
         s, e = self.scenario, self.env
         return run_blis.run_one(e.blis, e.catalog, e.registry, e.scenarios_dir, s.model, s.hardware,
                                 s.engine_version, s.workload, requests_for(concurrency, s.num_requests_base),
-                                seed, None, {**config, "concurrency": concurrency}, timeout=e.timeout)
+                                seed, None, {**config, "concurrency": concurrency}, timeout=e.timeout,
+                                stack=self.stack)
 
     def _path(self, key: str) -> Path:
         return self.cache_dir / key[:2] / f"{key}.json"
@@ -119,17 +159,20 @@ class CachedRunner:
             return {**rec, "error": f"shed: injected={inj} < offered={offered}"}
         return rec
 
-    def run(self, config: dict, concurrency: int, seed: int | None = None) -> dict:
+    def run(self, config: dict, concurrency: int, seed: int | None = None, shed_guard: bool = True) -> dict:
         """Router knobs are translated first (router.to_blis), so the cache key covers the
         EndpointPickerConfig BLIS actually runs, not just the knob values. A config they cannot
-        translate is passed on as is: run_blis refuses it and records an error row."""
+        translate is passed on as is: run_blis refuses it and records an error row.
+        shed_guard=False (ladder scoring) returns the record without _shed_guard; the cached
+        record is the same either way, as the guard is applied only on return."""
+        guard = self._shed_guard if shed_guard else (lambda rec, _c: rec)
         seed = self.scenario.seed if seed is None else seed
         try:
             config = router.to_blis(config)
         except ValueError:
             pass
         # measured no-op engine values (e.g. eplb with enable_eplb false) share the default's run
-        config = run_blis.canonical_config(config, self.scenario.engine_version)
+        config = run_blis.canonical_config(config, self.scenario.engine_version, self.stack)
         key = cache_key(config, concurrency, seed, self.scenario, self.shape)
         with self._lock:
             klock = self._key_locks.setdefault(key, threading.Lock())
@@ -138,7 +181,7 @@ class CachedRunner:
             if rec is not None:
                 with self._lock:
                     self.cache_hits += 1
-                return {**self._shed_guard(rec, concurrency), "cache_key": key}
+                return {**guard(rec, concurrency), "cache_key": key}
             rec = self.run_fn(config, concurrency, seed)
             with self._lock:
                 self.unique_runs += 1
@@ -149,7 +192,7 @@ class CachedRunner:
                 tmp = p.with_name(f"{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
                 tmp.write_text(json.dumps(rec, default=str))  # cmd holds Paths
                 os.replace(tmp, p)
-            return {**self._shed_guard(rec, concurrency), "cache_key": key}
+            return {**guard(rec, concurrency), "cache_key": key}
 
 
 def run_batch(fn: Callable[[T], R], items: list[T], workers: int | None = None) -> list[R]:

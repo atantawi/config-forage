@@ -17,7 +17,7 @@ from pathlib import Path
 
 from config_forage.blis.runner import BlisEnv, CachedRunner, run_batch
 from config_forage.feasibility import is_feasible
-from config_forage.probe import probe
+from config_forage.probe import score_config
 from config_forage.search.coord import _normalize
 from config_forage.space import load_space
 
@@ -52,7 +52,7 @@ def main() -> None:
         cfg = dict(base) if v is None else _normalize(sp, {**base, name: v})
         if not is_feasible(cfg, sp.scenario):
             return name, v, None
-        return name, v, probe(runner, sp.config(sp.decision(cfg)), sp.scenario)
+        return name, v, score_config(runner, sp.config(sp.decision(cfg)), sp.scenario)
 
     t0 = time.monotonic()
     res = run_batch(one, jobs, a.workers)

@@ -8,7 +8,7 @@ This product includes software from inference-sim/blis-config-search
 Version 2.0, at commit 1a6dc6fa89b7c3569b409b9b5c92143267dd80ad:
 
   - config_forage/blis/run_blis.py: vendored from .claude/skills/config-search/scripts/run_blis.py,
-    then modified for BLIS v0.14.0: the removed routing/admission flags are refused, an
+    then modified for BLIS v0.14.0 and v0.15.0: the removed routing/admission flags are refused, an
     EndpointPickerConfig is written as the scenario's router block, and data_parallel_load_balancing
     is a pool parallel field.
   - The topology and feasibility rules in config_forage/feasibility.py (tp·dp·num_instances = GPU
