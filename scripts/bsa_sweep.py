@@ -27,7 +27,8 @@ import numpy as np
 from config_forage.bench.analyze import load_grid, runs_to_within
 from config_forage.bench.grid import _key, meta_path
 from config_forage.bench.run import parse_seeds
-from config_forage.blis.runner import PINS, BlisEnv, CachedRunner, run_batch
+from config_forage.blis.runner import BlisEnv, CachedRunner, run_batch
+from config_forage.blis.stacks import stack_of
 from config_forage.feasibility import FeasibilityBiaser, enumerate_feasible
 from config_forage.probe import Objective
 from config_forage.search.bsa import BsaSearcher
@@ -45,14 +46,15 @@ def _refuse(config, concurrency, seed):
 
 def check_grid(space: KnobSpace, grid: Path) -> list[dict]:
     """grid's rows; raise ValueError unless its sidecar exists and matches space's space_hash and the
-    current pins, and its rows cover exactly the space's feasible decisions."""
+    pins of the space's own stack (what cf-grid writes), and its rows cover exactly the space's
+    feasible decisions."""
     mp = meta_path(grid)
     try:
         have = json.loads(mp.read_text())
     except FileNotFoundError:
         raise ValueError(f"{grid}: no sidecar {mp.name}, so its space and pins are unknown; "
                          "use a grid written by cf-grid") from None
-    want = {"space_hash": space_hash(space), "pins": list(PINS)}
+    want = {"space_hash": space_hash(space), "pins": list(stack_of(space.scenario).pins)}
     bad = [k for k in want if have.get(k) != want[k]]
     if bad:
         raise ValueError(f"{grid} is not this space's grid at these pins: "
