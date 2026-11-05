@@ -85,6 +85,13 @@ uv run cf-analyze results/s-mid-v3/runs --grid results/s-mid-v3/grid.jsonl --out
     --heldout 10 --space $SPACE --cache cache
 ```
 
+The `tpe-batch` arm (ladder spaces only) is TPE as a batched sweeper runs it:
+- `TPESampler(multivariate, group, constant_liar)` with Optuna's default startup;
+- rounds of up to 8 configs, evaluated in parallel and told back in trial order;
+- each round sized so that every config climbing every rung still fits the remaining budget.
+
+Plain `tpe` asks one config at a time.
+
 Without `--grid` (a space too large to enumerate), cf-analyze reports the best score found instead of
 regret. `cache/` holds content-addressed BLIS results, so repeated runs are free.
 
