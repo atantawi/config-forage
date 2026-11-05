@@ -5,7 +5,7 @@ import shutil
 import pytest
 import yaml
 
-from config_forage.blis import run_blis, workloads
+from config_forage.blis import run_blis, runner, workloads
 from config_forage.blis.runner import BlisEnv, CachedRunner, cache_key
 from config_forage.space import Scenario
 
@@ -99,7 +99,8 @@ def test_prefix_refused(catalog, prefix):
         workloads.shape("bad", catalog)
 
 
-def test_bad_preset_refused_before_any_run(catalog, tmp_path):
+def test_bad_preset_refused_before_any_run(catalog, tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "check_binary", lambda env, stack: None)   # fake catalog: no stack checkout
     (catalog / "workloads" / "bad.yaml").write_text(_preset({"tokens_min": 900}))
     with pytest.raises(ValueError, match="tokens_min"):
         CachedRunner(BlisEnv("blis", catalog, "reg", tmp_path / "sc"),
@@ -134,7 +135,8 @@ def test_run_one_refuses_a_replay_workload_as_an_error_row(catalog, tmp_path):
     assert rec["returncode"] is None and rec["cmd"] is None and "replay" in rec["error"]
 
 
-def test_cache_key_covers_the_shape(catalog, tmp_path):
+def test_cache_key_covers_the_shape(catalog, tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "check_binary", lambda env, stack: None)   # fake catalog: no stack checkout
     sc = Scenario("m", "h100", "chatbot", 8, "0.29.0")
     cfg = {"tp": 8, "num_instances": 1}
     legacy = cache_key(cfg, 8, 0, sc)

@@ -233,9 +233,29 @@ def test_stack_tags_checked(tmp_path):
 
 
 def test_binary_outside_a_checkout_warns(tmp_path, capsys):
+    _, cat = _git_repo(tmp_path / "cat")
+    _, reg = _git_repo(tmp_path / "reg")
+    cat("tag", V15.catalog_tag)
+    reg("tag", V15.registry_tag)
     env = runner.BlisEnv(tmp_path / "blis", tmp_path / "cat", tmp_path / "reg", tmp_path / "sc")
     runner.check_binary(env, V15)
     assert "not inside" in capsys.readouterr().err
+
+
+def test_binary_outside_a_checkout_still_checks_catalog_and_registry(tmp_path, capsys):
+    """A copied binary (e.g. an out-of-tree amd64 build) cannot be checked, but the data it runs against can:
+    a catalog or registry at another tag is refused, as it is for a binary inside a checkout."""
+    _, cat = _git_repo(tmp_path / "cat")
+    _, reg = _git_repo(tmp_path / "reg")
+    env = runner.BlisEnv(tmp_path / "blis", tmp_path / "cat", tmp_path / "reg", tmp_path / "sc")
+    with pytest.raises(ValueError, match=f"catalog.*{V15.catalog_tag}"):
+        runner.check_binary(env, V15)
+    assert "not inside" in capsys.readouterr().err   # the binary warning is still given
+    cat("tag", V15.catalog_tag)
+    with pytest.raises(ValueError, match=f"registry.*{V15.registry_tag}"):
+        runner.check_binary(env, V15)
+    reg("tag", V15.registry_tag)
+    runner.check_binary(env, V15)                      # catalog and registry match: warning only
 
 
 def test_runner_passes_its_stack_to_run_one(tmp_path, monkeypatch):

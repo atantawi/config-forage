@@ -74,19 +74,20 @@ def _git(d: Path, *args: str) -> str | None:
 
 
 def check_binary(env: BlisEnv, stack: Stack) -> None:
-    """Refuse a BLIS stack other than `stack`: when the binary sits in an inference-sim checkout
-    (main.go beside it), its HEAD must be stack.sim_sha and the catalog and registry checkouts must be
-    exactly at stack.catalog_tag and stack.registry_tag; else ValueError, before any run is keyed
-    under the stack's pins. A binary outside a checkout cannot be checked: warn on stderr."""
+    """Refuse a BLIS stack other than `stack`, before any run is keyed under the stack's pins
+    (ValueError): when the binary sits in an inference-sim checkout (main.go beside it), its HEAD must
+    be stack.sim_sha; a binary outside a checkout (e.g. a copied or cross-built one) cannot be
+    checked, so it gets a warning on stderr instead. Either way the catalog and registry checkouts
+    must be exactly at stack.catalog_tag and stack.registry_tag."""
     sim = Path(env.blis).parent
     if not (sim / "main.go").exists():
         print(f"config-forage: warning: {env.blis} is not inside an inference-sim checkout; cannot check "
               f"it is stack {stack.name} ({stack.sim_sha})", file=sys.stderr)
-        return
-    head = _git(sim, "rev-parse", "HEAD")
-    if head != stack.sim_sha:
-        raise ValueError(f"{env.blis} is built from inference-sim {head}, not stack {stack.name}'s "
-                         f"{stack.sim_sha}; point BLIS_BIN at that stack's binary")
+    else:
+        head = _git(sim, "rev-parse", "HEAD")
+        if head != stack.sim_sha:
+            raise ValueError(f"{env.blis} is built from inference-sim {head}, not stack {stack.name}'s "
+                             f"{stack.sim_sha}; point BLIS_BIN at that stack's binary")
     for what, d, tag in (("catalog", env.catalog, stack.catalog_tag), ("registry", env.registry, stack.registry_tag)):
         have = _git(Path(d), "describe", "--tags", "--exact-match")
         if have != tag:
