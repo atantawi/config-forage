@@ -82,7 +82,8 @@ class TpeBatchSearcher:
     Asked picks that need no run are told at once: an infeasible one scores FAILED, one already
     scored gets its score, and one repeating a pick of the same round is told after the round runs.
     After MAX_ASKS_PER_SLOT asks per open slot the round is filled with unseen configs in
-    enumeration order (not sampler trials; counted in trace.extra["fallback"]).
+    enumeration order (not sampler trials; counted in trace.extra["fallback"]). Enumeration is lazy
+    and resumed across rounds, so a large space is never walked unless the sampler keeps stalling.
     trace.extra["stop"] is "budget" or "exhausted" (every feasible config scored)."""
 
     def __init__(self, space: KnobSpace, batch: int = 8, workers: int | None = None, name: str = "tpe-batch"):
@@ -98,7 +99,7 @@ class TpeBatchSearcher:
         if not feasible_topologies(self.space):
             raise ValueError(f"no feasible decision in the space for scenario {sc}")
         rungs = len(sc.concurrency)
-        order = [self.space.canonical(d) for d in enumerate_feasible(self.space)]
+        order = (self.space.canonical(d) for d in enumerate_feasible(self.space))  # lazy: fill-ins only
         with warnings.catch_warnings():  # group and constant_liar are flagged experimental
             warnings.simplefilter("ignore", optuna.exceptions.ExperimentalWarning)
             sampler = optuna.samplers.TPESampler(multivariate=True, group=True, constant_liar=True, seed=seed)
@@ -106,15 +107,13 @@ class TpeBatchSearcher:
         labels = [tuple(map(str, k.values)) for k in self.space.knobs]
         rec, keys, base = Recorder(self.space, objective), set(), objective.runs_used
         scores: dict = {}  # decision -> score told (FAILED for a failure)
-        fallback, stop = 0, "budget"
+        fallback, stop, exhausted = 0, "budget", False
         while True:
-            unseen = len(order) - len(scores)
-            n = min(self.batch, (budget - objective.runs_used) // rungs, unseen)
+            n = min(self.batch, (budget - objective.runs_used) // rungs)
             if n <= 0:
-                stop = "exhausted" if unseen == 0 else "budget"
                 break
             picks, trials, repeats, asks = [], [], [], 0
-            while len(picks) < n and asks < MAX_ASKS_PER_SLOT * n:
+            while len(picks) < n and asks < MAX_ASKS_PER_SLOT * n and not exhausted:
                 trial, asks = study.ask(), asks + 1
                 d = self._suggest(trial, labels)
                 if not is_feasible(self.space.knob_values(d), sc):
@@ -126,13 +125,18 @@ class TpeBatchSearcher:
                 else:
                     picks.append(d)
                     trials.append(trial)
-            for d in order:
-                if len(picks) >= n:
+            while len(picks) < n and not exhausted:  # sampler stalled: fill in enumeration order
+                d = next(order, None)
+                if d is None:  # every feasible decision was met: the space is known from here on
+                    exhausted = True
                     break
                 if d not in scores and d not in picks:
                     picks.append(d)
                     trials.append(None)
                     fallback += 1
+            if not picks:  # sampler and enumeration both found nothing unscored (so no repeats)
+                stop = "exhausted"
+                break
             results = run_batch(objective, picks, self.workers)
             after = objective.runs_used
             for trial, d, r in zip(trials, picks, results):

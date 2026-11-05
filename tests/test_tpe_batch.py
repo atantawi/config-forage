@@ -86,3 +86,24 @@ def test_finds_good_configs():
 def test_arm_registered():
     s = ARMS["tpe-batch"](ladder_space(), {})
     assert isinstance(s, TpeBatchSearcher) and s.name == "tpe-batch"
+
+
+def test_does_not_enumerate_a_large_space(monkeypatch):
+    """A 6^12 (~2e9) ladder space at a small budget starts and finishes without walking the space:
+    enumeration is lazy, used only to fill a round the sampler cannot."""
+    import config_forage.feasibility as feas
+    from helpers import Deadline
+    walked = []
+    real = feas.enumerate_feasible
+
+    def counting(space):
+        for d in real(space):
+            walked.append(d)
+            yield d
+    monkeypatch.setattr(feas, "enumerate_feasible", counting)
+    sp = ladder_space(tuple(Knob(f"k{i}", tuple(range(6))) for i in range(12)))
+    with Deadline(20):
+        t = TpeBatchSearcher(sp, workers=1).search(
+            SyntheticObjective(sp, score_fn=lambda c: float(sum(c.values())), runs_per_eval=4), 80, seed=0)
+    assert len(t.points) == 20 and t.extra["stop"] == "budget"
+    assert len(walked) <= 20  # at most one walked decision per evaluation, never the space
