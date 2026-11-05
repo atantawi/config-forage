@@ -168,10 +168,14 @@ class CachedRunner:
         record is the same either way, as the guard is applied only on return."""
         guard = self._shed_guard if shed_guard else (lambda rec, _c: rec)
         seed = self.scenario.seed if seed is None else seed
-        try:
-            config = router.to_blis(config)
-        except ValueError:
-            pass
+        families = self.scenario.router_families
+        if families and config.get(router.FAMILY_KNOB) in families:
+            config = router.to_blis(config, families)  # a file family's errors are the space's: raise
+        else:
+            try:
+                config = router.to_blis(config)
+            except ValueError:
+                pass
         # measured no-op engine values (e.g. eplb with enable_eplb false) share the default's run
         config = run_blis.canonical_config(config, self.scenario.engine_version, self.stack)
         key = cache_key(config, concurrency, seed, self.scenario, self.shape)

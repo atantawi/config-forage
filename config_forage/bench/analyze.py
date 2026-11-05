@@ -408,6 +408,17 @@ def analyze(runs_dir: Path, out: Path, grid_path: Path | None = None, budgets: S
     return md
 
 
+def _budgets(s: str) -> tuple[int, ...]:
+    """'250,1000' -> (250, 1000): positive ints, strictly ascending."""
+    try:
+        bs = tuple(int(x) for x in s.split(","))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"budgets must be a comma list of ints, got {s!r}") from None
+    if not bs or any(b <= 0 for b in bs) or any(a >= b for a, b in zip(bs, bs[1:])):
+        raise argparse.ArgumentTypeError(f"budgets must be strictly ascending positive ints, got {s!r}")
+    return bs
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="cf-analyze", description=__doc__)
     ap.add_argument("runs", type=Path)
@@ -418,10 +429,12 @@ def main(argv=None) -> None:
                          "(needs --space, --cache and the BLIS_* environment)")
     ap.add_argument("--space", type=Path, default=None, help="space YAML (for --heldout)")
     ap.add_argument("--cache", type=Path, default=None, help="BLIS cache dir (for --heldout)")
+    ap.add_argument("--budgets", type=_budgets, default=BUDGETS,
+                    help=f"comma list of budgets for the tables (default {','.join(map(str, BUDGETS))})")
     a = ap.parse_args(argv)
     if a.heldout is not None and (a.space is None or a.cache is None):
         ap.error("--heldout needs --space and --cache")
-    analyze(a.runs, a.out, a.grid)
+    analyze(a.runs, a.out, a.grid, a.budgets)
     if a.heldout is not None:
         from config_forage.blis.runner import BlisEnv, CachedRunner
         from config_forage.space import load_space

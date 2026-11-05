@@ -48,6 +48,11 @@ def _tpe(sp: KnobSpace, o: dict) -> Searcher:
     return TpeSearcher(sp)
 
 
+def _tpe_batch(sp: KnobSpace, o: dict) -> Searcher:
+    from config_forage.search.tpe import TpeBatchSearcher
+    return TpeBatchSearcher(sp, workers=o.get("workers"))
+
+
 def _smac(sp: KnobSpace, o: dict) -> Searcher:
     from config_forage.search.smac import SmacSearcher
     return SmacSearcher(sp)
@@ -62,6 +67,7 @@ ARMS: dict[str, Callable[[KnobSpace, dict], Searcher]] = {
     "bsa-transfer": _transfer,
     "random": lambda sp, o: RandomSearcher(sp, feasible_only=True, workers=o.get("workers")),
     "tpe": _tpe,
+    "tpe-batch": _tpe_batch,
     "smac": _smac,
     "incumbent": lambda sp, o: IncumbentSearcher(sp),
     "coord-ascent": lambda sp, o: CoordAscentSearcher(sp),

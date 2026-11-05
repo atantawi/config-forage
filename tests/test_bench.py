@@ -628,3 +628,16 @@ def test_rescore_heldout_on_a_ladder_space(tmp_path):
     sp, runner = ladder_setup(tmp_path)
     out = analyze.rescore_heldout([sp.default_config()], runner, seeds=(1, 2))
     assert out[0]["failures"] == 0 and all(s is not None and s < 0 for s in out[0]["scores"])
+
+
+def test_budgets_flag(setup):
+    sp, runner, tmp = setup
+    grid.grid(sp, runner, tmp / "grid.jsonl", workers=4, log=None)
+    run.bench(sp, runner, ["random"], [0, 1], 60, tmp / "runs")
+    analyze.main([str(tmp / "runs"), "--grid", str(tmp / "grid.jsonl"), "--out", str(tmp / "o"),
+                  "--budgets", "25,60"])
+    head = next(ln for ln in (tmp / "o" / "table.md").read_text().splitlines() if ln.startswith("| method"))
+    assert "B=25" in head and "B=60" in head and "B=50" not in head
+    analyze.main([str(tmp / "runs"), "--grid", str(tmp / "grid.jsonl"), "--out", str(tmp / "d")])
+    head = next(ln for ln in (tmp / "d" / "table.md").read_text().splitlines() if ln.startswith("| method"))
+    assert "B=50" in head  # default BUDGETS, capped at the bench budget

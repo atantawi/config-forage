@@ -47,8 +47,15 @@ class Scenario:
     scoring: str = "probe"  # "probe" (C* probe) | "ladder" (concurrency ladder)
     concurrency: tuple[int, ...] | None = None  # ladder rungs, strictly ascending; ladder only
     early_stop: bool = True
+    # family name -> EndpointPickerConfig, read from the space's `router_files` (load_space); the
+    # runner substitutes it for an `endpoint_picker_config` knob value naming it (router.to_blis)
+    router_families: dict = field(default_factory=dict)
 
     def __post_init__(self):
+        from config_forage.router import FAMILIES
+        clash = sorted(set(self.router_families) & set(FAMILIES))
+        if clash:
+            raise ValueError(f"router_files family {clash} shadows a built-in router family: rename it")
         if self.scoring not in ("probe", "ladder"):
             raise ValueError(f"scoring {self.scoring!r} must be 'probe' or 'ladder'")
         if not isinstance(self.early_stop, bool):
@@ -186,6 +193,8 @@ def space_hash(space: KnobSpace) -> str:
     for name, default in (("scoring", "probe"), ("concurrency", None), ("early_stop", True)):
         if scenario.get(name) == default:  # likewise for the ladder fields at their defaults
             scenario.pop(name, None)
+    if not scenario.get("router_families"):  # likewise without router_files
+        scenario.pop("router_families", None)
     if scenario["slo"].get("e2e_p99_ms") is None:
         scenario["slo"].pop("e2e_p99_ms", None)
     payload = {"scenario": scenario, "knobs": [asdict(k) for k in space.knobs]}
@@ -199,7 +208,20 @@ def load_space(path: str | Path) -> KnobSpace:
     if "throughput_per_gpu" in slo:
         raise ValueError("slo.throughput_per_gpu is not supported")
     s["slo"] = Slo(**slo)
+    if "router_files" in s:
+        s["router_families"] = _router_families(Path(path).parent, s.pop("router_files") or {})
     knobs = tuple(Knob(k["name"], tuple(k["values"]),
                        (k["requires"][0], tuple(k["requires"][1])) if k.get("requires") else None,
                        k.get("default")) for k in raw["knobs"])
     return KnobSpace(Scenario(**s), knobs)
+
+
+def _router_families(base: Path, files: dict) -> dict:
+    """{family: EndpointPickerConfig dict}, each file read relative to the space file's directory."""
+    out = {}
+    for name, rel in files.items():
+        p = base / rel
+        if not p.is_file():
+            raise ValueError(f"router_files {name!r}: no file {rel} (relative to {base})")
+        out[name] = yaml.safe_load(p.read_text())
+    return out

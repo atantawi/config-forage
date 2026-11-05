@@ -85,6 +85,13 @@ uv run cf-analyze results/s-mid-v3/runs --grid results/s-mid-v3/grid.jsonl --out
     --heldout 10 --space $SPACE --cache cache
 ```
 
+The `tpe-batch` arm (ladder spaces only) is TPE as a batched sweeper runs it:
+- `TPESampler(multivariate, group, constant_liar)` with Optuna's default startup;
+- rounds of up to 8 configs, evaluated in parallel and told back in trial order;
+- each round sized so that every config climbing every rung still fits the remaining budget.
+
+Plain `tpe` asks one config at a time.
+
 Without `--grid` (a space too large to enumerate), cf-analyze reports the best score found instead of
 regret. `cache/` holds content-addressed BLIS results, so repeated runs are free.
 
@@ -114,6 +121,13 @@ configures. A space states it with flat knobs (`config_forage/router.py`):
 
 The runner writes the resulting config next to the scenario. The cache key covers that config, not
 just the knob values. `routing_policy`, `routing_scorers` and `admission_policy` are refused.
+
+Families can also come from files. The scenario names them in `router_files: {name: path}`, each path
+relative to the space file. An `endpoint_picker_config` value naming one runs that EndpointPickerConfig
+as is:
+- the name must not shadow a built-in family;
+- a `<scorer>_weight` knob cannot override it;
+- the space hash covers the files' contents, so editing one stops a resume into old results.
 
 ## Ladder scoring
 
