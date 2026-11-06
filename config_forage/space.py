@@ -1,6 +1,6 @@
 """Knob space: typed serving knobs loaded from YAML, mapped onto a BSA DecisionSpace.
 
-Adding a knob is a pure YAML addition; `tp`, `dp`, `enable_expert_parallel` also drive feasibility."""
+Adding a knob is a pure YAML addition; `tp`, `pp`, `dp`, `enable_expert_parallel` also drive feasibility."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ class Scenario:
     headroom: float = 0.8
     seed: int = 0
     num_requests_base: int = 80
-    model_entry: dict = field(default_factory=dict)  # arch (MoE|dense), heads_kv, min_footprint (tp·dp floor); absent = dense
+    model_entry: dict = field(default_factory=dict)  # arch (MoE|dense), heads_kv, min_footprint (tp·pp·dp floor); absent = dense
     stack: str | None = None  # BLIS stack (config_forage.blis.stacks); absent = v0.14.0
     scoring: str = "probe"  # "probe" (C* probe) | "ladder" (concurrency ladder)
     concurrency: tuple[int, ...] | None = None  # ladder rungs, strictly ascending; ladder only
@@ -105,13 +105,19 @@ class KnobSpace:
             raise ValueError(f"duplicate knob names in {names}")
         if "num_instances" in names:
             raise ValueError("num_instances is derived, not a knob")
-        topology = ("tp", "dp", "enable_expert_parallel")  # = feasibility.TOPOLOGY (no import cycle)
+        topology = ("tp", "pp", "dp", "enable_expert_parallel")  # = feasibility.TOPOLOGY (no import cycle)
         for i, k in enumerate(self.knobs):
             labels = [str(v) for v in k.values]
             if len(set(labels)) != len(labels):
                 raise ValueError(f"knob {k.name}: option labels {labels} are not unique (str of each value)")
             if k.requires is not None and k.name in topology:
                 raise ValueError(f"knob {k.name}: a topology knob cannot be conditional (requires)")
+            if k.name in ("tp", "pp", "dp"):
+                # widths multiply into the instance width (feasibility, num_instances): a zero divides
+                # by zero there, and a bool, float or string would pass as a width BLIS never runs
+                bad = [v for v in k.values if type(v) is not int or v < 1]
+                if bad:
+                    raise ValueError(f"knob {k.name}: values must be positive integers, got {bad}")
             if k.requires is not None:
                 if k.requires[0] not in names[:i]:
                     raise ValueError(f"knob {k.name}: requires an earlier knob, not {k.requires[0]!r}")
@@ -157,13 +163,13 @@ class KnobSpace:
 
     def config(self, d: Decision) -> dict:
         """Typed config of a decision; unlabelled axes are omitted, num_instances is derived.
-        Raises ValueError when the instance width tp·dp exceeds the GPU budget (num_instances 0):
+        Raises ValueError when the instance width tp·pp·dp exceeds the GPU budget (num_instances 0):
         check `is_feasible(knob_values(d), scenario)` first for a decision that may be infeasible."""
         c = self.knob_values(d)
-        width = c.get("tp", 1) * c.get("dp", 1)
+        width = c.get("tp", 1) * c.get("pp", 1) * c.get("dp", 1)
         c["num_instances"] = self.scenario.gpu_budget // width
         if c["num_instances"] == 0:
-            raise ValueError(f"num_instances 0: width tp·dp = {width} exceeds the GPU budget "
+            raise ValueError(f"num_instances 0: width tp·pp·dp = {width} exceeds the GPU budget "
                              f"{self.scenario.gpu_budget}")
         return c
 
@@ -178,7 +184,7 @@ class KnobSpace:
             if k.requires is None or c.get(k.requires[0]) in k.requires[1]:
                 c[k.name] = k.default
         if not is_feasible(c, self.scenario):
-            topo = {n: c[n] for n in ("tp", "dp", "enable_expert_parallel") if n in c}
+            topo = {n: c[n] for n in ("tp", "pp", "dp", "enable_expert_parallel") if n in c}
             raise ValueError(f"default topology {topo} is infeasible for the scenario")
         return self.config(self.decision(c))
 

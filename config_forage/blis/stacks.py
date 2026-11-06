@@ -47,6 +47,9 @@ class Stack:
     # what BLIS prints on stdout: "flat" MetricsOutput objects (run_blis.parse_metrics) or one
     # "result-doc" blis-schemas Result document (result_doc.parse_result_document)
     result_format: str = "flat"
+    # whether this stack's kernel prices pipeline parallelism (pp > 1); where it does not, run_blis
+    # refuses pp > 1 rather than price it
+    pipeline_parallel: bool = False
 
 
 STACKS: dict[str, Stack] = {
@@ -66,7 +69,10 @@ STACKS: dict[str, Stack] = {
         # re-measured on this stack, engine 0.32.0 (scripts/measure_folds.py; docs/experiments/v015-folds.md):
         # all2all_alias is out -- pplx and naive price as allgather_reducescatter, but the Result
         # document carries the engine's rename warning, so the runs are not byte-identical
-        frozenset(FOLDS) - {"all2all_alias"}, V015_INERT_BLOCK_FIELDS, "result-doc"),
+        frozenset(FOLDS) - {"all2all_alias"}, V015_INERT_BLOCK_FIELDS, "result-doc",
+        # BLIS v0.15.0 prices pp (762f160 "pipelined engines"; blis-vllm v0.32.0-blis.1 runs vLLM's
+        # batch queue with async scheduling). It refuses pp with dp > 1 itself (core/vllm/config.go).
+        pipeline_parallel=True),
 }
 DEFAULT_STACK = "v0.14.0"
 

@@ -231,8 +231,16 @@ def classify_config(config, engine_version=DEFAULT_ENGINE_VERSION, stack=V014):
             supported = (sorted(SCENARIO_PARALLEL) + sorted(SCENARIO_ROUTER) + sorted(SCENARIO_ENGINE)
                          + sorted(SCENARIO_ENGINE_BLOCKS) + sorted(CLI_FLAGS))
             raise ConfigError(f"{k!r}: unknown key; supported = {supported}")
-    if parallel["pp"] != 1:
-        raise ConfigError("pp>1: the pinned kernel does not price pipeline parallelism")
+    pp = parallel["pp"]
+    if type(pp) is not int or pp < 1:
+        raise ConfigError(f"'pp': must be a positive integer, got {pp!r}")
+    if pp != 1 and not stack.pipeline_parallel:
+        raise ConfigError(f"pp>1: stack {stack.name}'s kernel does not price pipeline parallelism")
+    if pp != 1 and parallel["dp"] != 1:
+        # BLIS refuses it at startup (blis-vllm v0.32.0-blis.1 core/vllm/config.go: the DP group is
+        # diff-tested on one pipeline stage per rank); refused here first, before a run
+        raise ConfigError(f"pp {pp} with dp {parallel['dp']}: BLIS does not build pipeline parallelism "
+                          f"inside data-parallel ranks")
     fp = footprint_gpus(parallel)
     # A multi-node single instance IS supported: the generated scenario names a fabric once the
     # pool spans nodes (see scenario_yaml), and BLIS prices the cross-node collectives from it.
@@ -316,7 +324,9 @@ def check_eplb_layout(catalog, model, parallel, engine):
         raise ConfigError(f"'eplb': cannot validate the EPLB layout: {e}") from None
     if experts < 2:
         raise ConfigError(f"'eplb': cannot validate the EPLB layout: {model} has no routed experts")
-    width = parallel["tp"] * parallel["pp"] * parallel["dp"]    # EP spans the TP x DP ranks
+    # the EP width, as blis-schemas v0.10.0 Parallelism.ExpertParallelWidth: TP x DP, not pp
+    # (each pipeline stage holds its own layers' experts, sharded over that stage's TP x DP ranks)
+    width = parallel["tp"] * parallel["dp"]
     redundant = eplb.get("num_redundant_experts", 0)
     if (experts + redundant) % width:
         need = (width - (experts + redundant) % width) % width

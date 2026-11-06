@@ -1,0 +1,10 @@
+# A tiny MoE space with pipeline parallelism, on a stack that prices it (v0.15.0).
+scenario: {model: tiny-moe, hardware: h100, workload: chatbot, gpu_budget: 16, stack: v0.15.0,
+           engine_version: "0.32.0", slo: {itl_p99_ms: 100}, seed: 0,
+           model_entry: {arch: MoE, heads_kv: 8, min_footprint: 8}}
+knobs:
+  - {name: tp, values: [2, 4, 8, 16], default: 8}
+  - {name: pp, values: [1, 2, 4, 8], default: 1}
+  - {name: dp, values: [1, 2], default: 1}
+  - {name: enable_expert_parallel, values: [false, true], default: true}
+  - {name: max_num_seqs, values: [64, 256], default: 256}
