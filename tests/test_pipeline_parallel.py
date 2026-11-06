@@ -103,3 +103,15 @@ def test_spaces_without_pp_unchanged():
     sp = load_space(TINY)
     assert all("pp" not in t for t in feasible_topologies(sp))
     assert all(is_feasible({**sp.knob_values(d), "pp": 1}, sp.scenario) for d in enumerate_feasible(sp))
+
+
+@pytest.mark.parametrize("name", ["tp", "pp", "dp"])
+@pytest.mark.parametrize("bad", [0, -2, True, 2.5, "x"])
+def test_space_refuses_non_positive_int_widths(name, bad):
+    """A width value that is not a positive int is refused when the space is built, before
+    is_feasible's arithmetic (0 divides by zero; bool, float and str would pass as widths)."""
+    from config_forage.space import KnobSpace
+    sp = load_space(PP_SPACE)
+    knobs = tuple(replace(k, values=(*k.values, bad)) if k.name == name else k for k in sp.knobs)
+    with pytest.raises(ValueError, match=f"knob {name}: values must be positive integers"):
+        KnobSpace(sp.scenario, knobs)

@@ -112,6 +112,12 @@ class KnobSpace:
                 raise ValueError(f"knob {k.name}: option labels {labels} are not unique (str of each value)")
             if k.requires is not None and k.name in topology:
                 raise ValueError(f"knob {k.name}: a topology knob cannot be conditional (requires)")
+            if k.name in ("tp", "pp", "dp"):
+                # widths multiply into the instance width (feasibility, num_instances): a zero divides
+                # by zero there, and a bool, float or string would pass as a width BLIS never runs
+                bad = [v for v in k.values if type(v) is not int or v < 1]
+                if bad:
+                    raise ValueError(f"knob {k.name}: values must be positive integers, got {bad}")
             if k.requires is not None:
                 if k.requires[0] not in names[:i]:
                     raise ValueError(f"knob {k.name}: requires an earlier knob, not {k.requires[0]!r}")
