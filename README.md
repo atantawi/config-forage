@@ -212,6 +212,9 @@ Details:
 - Multi-node instances (tp·dp a multiple of 8 above one node, over an `ib-400g` fabric) are in the
   space. BLIS prices them, but the accuracy dashboard does not score multi-node points against
   hardware, so they are less validated than single-node ones.
+- **Pipeline parallelism.** `pp` is a topology knob on stacks whose kernel prices it (v0.15.0; refused
+  on v0.14.0). The instance width is tp·pp·dp; the expert-parallel width is tp·dp. pp with dp > 1 is
+  refused, as BLIS refuses it.
 - **Workload.** Closed-loop `blis run --concurrency` ignores `--workload` and draws from its
   `--prompt-tokens*`/`--output-tokens*` defaults (512/512, max 7000). Every run before the
   2026-10-30 fix (PR #6) passed `--workload chatbot` and drew from those defaults, so both ground truths are
