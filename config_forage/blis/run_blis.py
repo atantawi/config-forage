@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Vendored from inference-sim/blis-config-search (Apache-2.0) at 1a6dc6fa89b7c3569b409b9b5c92143267dd80ad,
-# then modified for BLIS v0.14.0 and v0.15.0 (see NOTICE; per-stack tables in config_forage.blis.stacks): routing goes through the embedded llm-d router, which
+# then modified for BLIS v0.14.0, v0.15.0 and v0.16.0 (see NOTICE; per-stack tables in config_forage.blis.stacks): routing goes through the embedded llm-d router, which
 # the scenario's `router:` block configures with an EndpointPickerConfig (epp_config, or the flat router
 # knobs of config_forage.router); the BLIS-native routing/admission flags were removed in v0.12.0. DP
 # load balancing is a pool parallel field.
@@ -118,6 +118,14 @@ UNSUPPORTED = {
 }
 
 
+# CLI keys a stack refuses (stack name -> {key: reason}); a stack absent here takes every CLI_FLAGS key
+DEPRECATED_CLI = {"v0.16.0": {
+    k: (f"--{k.replace('_', '-')} is deprecated in BLIS v0.16.0 (removed in v0.19.0): the engine block's "
+        f"scheduling_policy decides it, and on engine 0.32.0 only fcfs is priced (priority is refused), so "
+        f"it is not a knob here")
+    for k in ("scheduler", "preemption_policy")}}
+
+
 class ConfigError(ValueError):
     pass
 
@@ -223,6 +231,8 @@ def classify_config(config, engine_version=DEFAULT_ENGINE_VERSION, stack=V014):
             engine[k] = v
         elif k in SCENARIO_ENGINE_BLOCKS:
             engine[k] = engine_block(k, v, stack)
+        elif k in DEPRECATED_CLI.get(stack.name, {}):
+            raise ConfigError(f"{k!r}: {DEPRECATED_CLI[stack.name][k]}")
         elif k in CLI_FLAGS:
             cli[k] = v
         elif k in UNSUPPORTED:
@@ -542,15 +552,18 @@ def resolve_defaults(blis, defaults):
 
 
 def build_cmd(blis, catalog, registry, scenarios_dir, scenario_name, shape, num_requests, seed,
-              horizon, defaults, cli):
+              horizon, defaults, cli, embedded_data=False):
     # BLIS (v0.10.0 on) selects the kernel cost-model backend from the
     # scenario's `coefficients:` list (written into the generated scenario), not a CLI flag.
     # The old `--latency-model blis-latency-kernel` flag was removed in the release and is
     # rejected ("unknown flag"), so it must not be passed.
-    cmd = [blis, "run",
-           "--scenario", scenario_name, "--scenarios", scenarios_dir, "--registry", registry]
-    if catalog:
-        cmd += ["--catalog", catalog]
+    # A stack with embedded data (v0.16.0 on) prices with the catalog and registry compiled into BLIS:
+    # --catalog/--registry would override them, so neither is passed.
+    cmd = [blis, "run", "--scenario", scenario_name, "--scenarios", scenarios_dir]
+    if not embedded_data:
+        cmd += ["--registry", registry]
+        if catalog:
+            cmd += ["--catalog", catalog]
     if resolve_defaults(blis, defaults):
         cmd += ["--defaults-filepath", resolve_defaults(blis, defaults)]
     cmd += workloads.cli_flags(shape)       # not --workload: closed-loop runs ignore it
@@ -563,6 +576,10 @@ def build_cmd(blis, catalog, registry, scenarios_dir, scenario_name, shape, num_
     for k, v in cli.items():
         cmd += [CLI_FLAGS[k], str(v)]
     return cmd
+
+
+# Stack.result_format -> the Result schema_version result_doc reads
+RESULT_DOC_VERSIONS = {"result-doc": 1, "result-doc-v2": 2}
 
 
 def _record_shell(config, phase):
@@ -600,19 +617,26 @@ def run_one(blis, catalog, registry, scenarios_dir, model, hardware, engine_vers
     scenario_name = write_scenario(scenarios_dir, model, hardware, engine_version, parallel, engine,
                                    num_instances, epp_file=epp_file, coefficients=stack.coefficients)
     cmd = build_cmd(blis, catalog, registry, scenarios_dir, scenario_name, shape,
-                    num_requests, seed, horizon, defaults, cli)
+                    num_requests, seed, horizon, defaults, cli, stack.embedded_data)
     t0 = time.time()
     try:
-        pr = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        # BLIS v0.16.0 also reads BLIS_CATALOG/BLIS_REGISTRY as overrides of its embedded data
+        # (cmd/catalog_root.go:25-26); on an embedded-data stack those name config-forage's reading copy,
+        # so they are hidden from BLIS
+        env = ({k: v for k, v in os.environ.items() if k not in ("BLIS_CATALOG", "BLIS_REGISTRY")}
+               if stack.embedded_data else None)
+        pr = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
         stdout, stderr, rc = pr.stdout, pr.stderr, pr.returncode
     except subprocess.TimeoutExpired:
         stdout, stderr, rc = "", "timeout", -1
     metrics, per_instance, doc_error = {}, [], None
-    if rc == 0 and stack.result_format == "result-doc":
+    if rc == 0 and stack.result_format in RESULT_DOC_VERSIONS:
         try:
-            metrics, per_instance = result_doc.parse_result_document(stdout)
+            metrics, per_instance = result_doc.parse_result_document(stdout, RESULT_DOC_VERSIONS[stack.result_format])
+            if stack.embedded_data:
+                result_doc.check_embedded_data(stdout)
         except ValueError as e:
-            doc_error = f"rc=0 but {e}"
+            metrics, per_instance, doc_error = {}, [], f"rc=0 but {e}"
     elif rc == 0:
         metrics, per_instance = parse_metrics(stdout), parse_all_instances(stdout)
     if rc != 0:

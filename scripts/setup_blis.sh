@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
 # Clone and build a pinned BLIS stack (upstream blis-config-search SETUP.md §1–2) into DEST. Go >= 1.27.2.
-# STACK is v0.15.0 (the default) or v0.14.0; its pins must match config_forage/blis/stacks.py, which
+# STACK is v0.15.0 (the default), v0.14.0 or v0.16.0; its pins must match config_forage/blis/stacks.py, which
 # CachedRunner checks the binary and checkouts against (runner.check_binary). Use one DEST per stack.
 # Idempotent: existing clones are kept (not re-cloned) but their commits are still verified;
 # the binary is built if missing or older than the checkout's Go sources. Prints the four BLIS_* exports on success.
 #
 #   scripts/setup_blis.sh ../blis-stack-v015            # v0.15.0
 #   scripts/setup_blis.sh ../blis-stack-v014 v0.14.0    # replay v0.14.0 results
+#   scripts/setup_blis.sh ../blis-stack-v016 v0.16.0    # BLIS v0.16.0
+#
+# v0.16.0 prices with the catalog and registry embedded in the binary (blis-substrate, pinned in its
+# go.mod), so there is no catalog or registry clone to price with: BLIS_CATALOG and BLIS_REGISTRY point
+# into a blis-substrate checkout at that tag, which config-forage reads workload presets and model
+# graphs from (the same data BLIS embeds).
 set -euo pipefail
 
-DEST=${1:?usage: setup_blis.sh DEST [v0.14.0|v0.15.0]}
+DEST=${1:?usage: setup_blis.sh DEST [v0.14.0|v0.15.0|v0.16.0]}
 STACK=${2:-v0.15.0}
 case "$STACK" in
   v0.14.0)
@@ -20,7 +26,10 @@ case "$STACK" in
     SIM_SHA=762f1605ff27cd825d6b2cb2d9e991cd4b864c91   # release v0.15.0 (kernel v0.5.0, blis-vllm v0.32.0-blis.1)
     CATALOG_TAG=0.5.0
     REGISTRY_TAG=v0.3.0 ;;                              # carries cost-model-fabric
-  *) echo "unknown stack $STACK; expected v0.14.0 or v0.15.0" >&2; exit 2 ;;
+  v0.16.0)
+    SIM_SHA=3f4998e28f922611a2d21d5c7ffe18a5272fe114   # release v0.16.0 (blis-substrate v0.13.0, blis-vllm v0.32.0-blis.2)
+    SUBSTRATE_TAG=v0.13.0 ;;                            # embedded catalog and registry; must match go.mod
+  *) echo "unknown stack $STACK; expected v0.14.0, v0.15.0 or v0.16.0" >&2; exit 2 ;;
 esac
 SIM_TAG=$STACK
 GH=https://github.com/inference-sim
@@ -67,10 +76,23 @@ else
   (cd "$DEST/inference-sim" && go build -o blis main.go) >&2
 fi
 
-clone blis-catalog "$CATALOG_TAG";  check_tag blis-catalog "$CATALOG_TAG"
-clone blis-registry "$REGISTRY_TAG"; check_tag blis-registry "$REGISTRY_TAG"
+if [[ -n "${SUBSTRATE_TAG:-}" ]]; then
+  GOMOD=$(awk '$1 == "github.com/inference-sim/blis-substrate" {print $2}' "$DEST/inference-sim/go.mod")
+  if [[ "$GOMOD" != "$SUBSTRATE_TAG" ]]; then
+    echo "inference-sim go.mod pins blis-substrate ${GOMOD:-nothing}, expected $SUBSTRATE_TAG -- aborting" >&2
+    exit 1
+  fi
+  clone blis-substrate "$SUBSTRATE_TAG"; check_tag blis-substrate "$SUBSTRATE_TAG"
+  CATALOG_DIR=$DEST/blis-substrate/catalog
+  REGISTRY_DIR=$DEST/blis-substrate/registry
+else
+  clone blis-catalog "$CATALOG_TAG";  check_tag blis-catalog "$CATALOG_TAG"
+  clone blis-registry "$REGISTRY_TAG"; check_tag blis-registry "$REGISTRY_TAG"
+  CATALOG_DIR=$DEST/blis-catalog
+  REGISTRY_DIR=$DEST/blis-registry
+fi
 
 echo "export BLIS_BIN=$DEST/inference-sim/blis"
-echo "export BLIS_CATALOG=$DEST/blis-catalog"
-echo "export BLIS_REGISTRY=$DEST/blis-registry"
+echo "export BLIS_CATALOG=$CATALOG_DIR"
+echo "export BLIS_REGISTRY=$REGISTRY_DIR"
 echo "export BLIS_SCENARIOS=\${BLIS_SCENARIOS:-/tmp/cf-scenarios}"
