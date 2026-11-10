@@ -203,8 +203,13 @@ def check_embedded_data(stdout: str) -> None:
     """ValueError unless the Result says BLIS read both its catalog and its registry from the copies
     embedded in it (`data.catalog.source` and `data.registry.source` "embedded"; inference-sim v0.16.0
     docs/guide/results.md:29): a stack with embedded data is priced on those, and its pins name no other."""
-    data = json.loads(stdout).get("data") or {}
+    data = json.loads(stdout).get("data")
+    if not isinstance(data, dict):
+        raise ValueError(f"Result document's data is not an object: {data!r}")  # noqa: TRY004 (callers catch ValueError)
     for what in ("catalog", "registry"):
-        src = (data.get(what) or {}).get("source") if isinstance(data, dict) else None
+        entry = data.get(what)
+        if not isinstance(entry, dict):
+            raise ValueError(f"Result document's data.{what} is not an object: {entry!r}")  # noqa: TRY004
+        src = entry.get("source")
         if src != "embedded":
             raise ValueError(f"Result document's data.{what}.source is {src!r}, not 'embedded'")

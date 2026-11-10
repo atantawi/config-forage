@@ -259,3 +259,22 @@ def test_v016_tables_as_measured():
     ep = {**CFG}
     assert run_blis.canonical_config({**ep, "all2all_backend": "pplx"}, "0.32.0", V16) == {**ep, "all2all_backend": "pplx"}
     assert run_blis.canonical_config({**ep, "long_prefill_token_threshold": 0}, "0.32.0", V16) == ep
+
+
+@pytest.mark.parametrize("edit", [
+    lambda d: d.update(data="embedded"),
+    lambda d: d.update(data=["embedded"]),
+    lambda d: d["data"].update(catalog="embedded"),
+    lambda d: d["data"].update(registry=["embedded"]),
+    lambda d: d["data"].update(catalog=7),
+])
+def test_v016_malformed_data_section_is_an_error_row(tmp_path, monkeypatch, edit):
+    """A data section, or a catalog/registry entry, that is not an object is a ValueError (an error
+    row from run_one), never an AttributeError escaping the sweep."""
+    d = json.loads(_doc("result-v016-kimi.json"))
+    edit(d)
+    with pytest.raises(ValueError, match=r"data(\.catalog|\.registry)? is not an object"):
+        result_doc.check_embedded_data(json.dumps(d))
+    _fake_blis(monkeypatch, json.dumps(d))
+    rec = _run(tmp_path, CFG)
+    assert rec["metrics"] == {} and "is not an object" in rec["error"]
