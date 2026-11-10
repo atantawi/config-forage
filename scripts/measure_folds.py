@@ -39,7 +39,7 @@ DROPPED = ("name", "runtime.wall_clock_s", "runtime.started_utc", "input.scenari
            "input.deployment.name", "input.deployment.pools[*].engine")
 
 
-def pairs(redundant: tuple[int, int]):
+def pairs(redundant: tuple[int, int], inert: bool = True):
     """(name, claim, variant, its canonical form); name is a FOLDS entry, "inert:<field>" or "control"
     (a value BLIS prices, which must move the metrics). `redundant`: the two num_redundant_experts
     counts EPLB-on variants use (each must fit in memory and keep the EP width dividing the experts)."""
@@ -57,7 +57,7 @@ def pairs(redundant: tuple[int, int]):
     ("eplb_zero_redundant", "eplb on, 0 redundant = eplb on",
      {"eplb": {**ON, "num_redundant_experts": 0}}, {"eplb": ON}),
     ]
-    for f in ("window_size", "step_interval"):
+    for f in ("window_size", "step_interval") if inert else ():
         for r in redundant:
             out.append((f"inert:{f}", f"eplb on, {r} redundant: {f} 1 = 1000000",
                         {"eplb": {**ON, "num_redundant_experts": r, f: 1}},
@@ -102,6 +102,8 @@ def main(argv=None) -> int:
     p.add_argument("--workload", default="chatbot")
     p.add_argument("--num-requests-base", type=int, default=1280)
     p.add_argument("--redundant", default="32,64", help="two num_redundant_experts counts (default 32,64)")
+    p.add_argument("--no-inert", action="store_true", help="skip the inert eplb field pairs (for a stack "
+                   "whose BLIS refuses window_size and step_interval itself, as v0.16.0 does)")
     p.add_argument("--set", default="{}", help="JSON merged into the base config, e.g. a model that needs "
                    'more memory for redundant experts: \'{"gpu_memory_utilization": 0.95}\'')
     a = p.parse_args(argv)
@@ -140,7 +142,7 @@ def main(argv=None) -> int:
     print(f"compared: BLIS stdout less {', '.join(DROPPED)}\n")
     print("| fold / field | claim | identical |\n|---|---|---|")
     verdict: dict[str, bool] = {}
-    for name, claim, v, canon in pairs(tuple(int(x) for x in a.redundant.split(","))):
+    for name, claim, v, canon in pairs(tuple(int(x) for x in a.redundant.split(",")), not a.no_inert):
         same = observed(v) == observed(canon)
         print(f"| {name} | {claim} | {'yes' if same else 'no'} |")
         if name != "control":

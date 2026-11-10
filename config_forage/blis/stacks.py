@@ -29,6 +29,16 @@ V015_INERT_BLOCK_FIELDS = {"eplb": {
        "32 and 64)"
     for f in ("window_size", "step_interval")}}
 
+# Re-measured on v0.16.0, engine 0.32.0 (scripts/measure_folds.py; docs/experiments/v016-folds.md), not
+# copied: the same as v0.15.0, all2all_alias out (the Result still records the engine's rename warning).
+V016_FOLDS = frozenset(FOLDS) - {"all2all_alias"}
+# BLIS v0.16.0 refuses these itself when stated away from vLLM's default (blis-vllm v0.32.0-blis.2
+# core/vllm/config.go:623-631, issue #76: "not modelled"); refused here first, before a run.
+V016_INERT_BLOCK_FIELDS = {"eplb": {
+    f: "not modelled in BLIS v0.16.0: blis-vllm v0.32.0-blis.2 refuses a value other than vLLM's default "
+       "(blis-vllm#76)"
+    for f in ("window_size", "step_interval")}}
+
 
 @dataclass(frozen=True)
 class Stack:
@@ -50,6 +60,11 @@ class Stack:
     # whether this stack's kernel prices pipeline parallelism (pp > 1); where it does not, run_blis
     # refuses pp > 1 rather than price it
     pipeline_parallel: bool = False
+    # whether BLIS prices with the catalog and registry compiled into it (v0.16.0 on): run_blis then
+    # passes no --catalog/--registry and refuses a Result whose data is not "embedded". BlisEnv's
+    # catalog is still read here, for workload presets and model graphs: it must be the same data,
+    # so for such a stack catalog_tag and registry_tag are the blis-substrate release BLIS embeds.
+    embedded_data: bool = False
 
 
 STACKS: dict[str, Stack] = {
@@ -73,6 +88,17 @@ STACKS: dict[str, Stack] = {
         # BLIS v0.15.0 prices pp (762f160 "pipelined engines"; blis-vllm v0.32.0-blis.1 runs vLLM's
         # batch queue with async scheduling). It refuses pp with dp > 1 itself (core/vllm/config.go).
         pipeline_parallel=True),
+    "v0.16.0": Stack(
+        "v0.16.0",
+        ("inference-sim v0.16.0 3f4998e28f922611a2d21d5c7ffe18a5272fe114", "substrate v0.13.0",
+         "blis-vllm v0.32.0-blis.2", "router v1.0.0-blis.3", "data embedded", "workload as token-shape flags"),
+        # catalog and registry: the embedded blis-substrate v0.13.0 (go.mod at 3f4998e); config-forage
+        # reads its catalog/ and registry/ from a blis-substrate checkout at that tag
+        "3f4998e28f922611a2d21d5c7ffe18a5272fe114", "v0.13.0", "v0.13.0", "0.32.0",
+        V014_COEFFICIENTS + ("cost-model-fabric",),
+        V016_FOLDS, V016_INERT_BLOCK_FIELDS, "result-doc-v2",
+        # blis-vllm v0.32.0-blis.2 still refuses pp with dp > 1 (core/vllm/config.go:379)
+        pipeline_parallel=True, embedded_data=True),
 }
 DEFAULT_STACK = "v0.14.0"
 

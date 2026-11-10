@@ -27,17 +27,26 @@ uv run pytest -q          # unit tests; the BLIS-marked tests skip without BLIS
 
 ## BLIS setup
 
-Two stacks are pinned (`config_forage/blis/stacks.py`). v0.14.0 is inference-sim v0.14.0 (`f2ba6bb`,
+Three stacks are pinned (`config_forage/blis/stacks.py`). v0.14.0 is inference-sim v0.14.0 (`f2ba6bb`,
 latency kernel v0.4.0, blis-vllm v0.32.0), blis-catalog 0.3.0 and blis-registry v0.2.0, with
 `engine_version: "0.29.0"`. Every existing space runs on it. v0.15.0 is inference-sim v0.15.0
 (`762f160`, kernel v0.5.0, blis-vllm v0.32.0-blis.1), blis-catalog 0.5.0 and blis-registry v0.3.0,
-with `engine_version: "0.32.0"`. A space must state its stack's engine version. Go ≥ 1.27.2 is
+with `engine_version: "0.32.0"`. v0.16.0 is inference-sim v0.16.0 (`3f4998e`, blis-substrate v0.13.0,
+blis-vllm v0.32.0-blis.2, router v1.0.0-blis.3), also on `engine_version: "0.32.0"`. It prices with the
+catalog and registry embedded in the binary: config-forage passes no `--catalog`/`--registry`, hides
+`BLIS_CATALOG`/`BLIS_REGISTRY` from BLIS, and refuses a Result whose `data` source is not `embedded`.
+`BLIS_CATALOG`/`BLIS_REGISTRY` point into a blis-substrate checkout at v0.13.0, the same data, which
+config-forage reads workload presets and model graphs from. v0.16.0 prints Result schema 2
+(`config_forage/blis/result_doc.py`), and it refuses `scheduler` and `preemption_policy` (both are
+deprecated in v0.16.0; on engine 0.32.0 only fcfs is priced). Its fold and inert-field tables were
+measured again on it (`docs/experiments/v016-folds.md`). A space must state its stack's engine version. Go ≥ 1.27.2 is
 required to build the simulator. Results from the earlier v0.10.0 stack (S-mid v2, `results/s-mid3`)
 are kept as an archive. Their cache keys carry the old pins, so they never mix with new runs.
 
 ```sh
 scripts/setup_blis.sh ../blis-stack-v014 v0.14.0   # clones, verifies the pinned commits, builds; idempotent
 scripts/setup_blis.sh ../blis-stack-v015           # BLIS v0.15.0 (the script's default), for a space with stack: v0.15.0
+scripts/setup_blis.sh ../blis-stack-v016 v0.16.0   # BLIS v0.16.0 and a blis-substrate v0.13.0 checkout
 ```
 
 A space runs on the stack its `stack:` field names (absent: v0.14.0), and the runner refuses a
@@ -149,7 +158,7 @@ A space may set `scoring: ladder` and `concurrency: [c1, c2, ...]` (strictly asc
 `cf-grid` rows of a ladder space add `scoring` and `best_rounded`; a probe space's rows keep their keys.
 
 Earlier results are v0.14.0 and probe-scored. The glm-5.3 models do not run on engine
-0.32.0, so a v0.15.0 space needs another model (e.g. kimi-k2.5).
+0.32.0, so a v0.15.0 or v0.16.0 space needs another model (e.g. kimi-k2.5).
 
 ## Objective and budget unit
 
@@ -212,8 +221,8 @@ Details:
 - Multi-node instances (tp·dp a multiple of 8 above one node, over an `ib-400g` fabric) are in the
   space. BLIS prices them, but the accuracy dashboard does not score multi-node points against
   hardware, so they are less validated than single-node ones.
-- **Pipeline parallelism.** `pp` is a topology knob on stacks whose kernel prices it (v0.15.0; refused
-  on v0.14.0). The instance width is tp·pp·dp; the expert-parallel width is tp·dp. pp with dp > 1 is
+- **Pipeline parallelism.** `pp` is a topology knob on stacks whose kernel prices it (v0.15.0 and v0.16.0;
+  refused on v0.14.0). The instance width is tp·pp·dp; the expert-parallel width is tp·dp. pp with dp > 1 is
   refused, as BLIS refuses it.
 - **Workload.** Closed-loop `blis run --concurrency` ignores `--workload` and draws from its
   `--prompt-tokens*`/`--output-tokens*` defaults (512/512, max 7000). Every run before the

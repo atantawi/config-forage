@@ -111,7 +111,11 @@ def _deployment(stack=V14, engine_version="0.29.0"):
 def test_stack_pins_name_its_commit_and_tags():
     for s in STACKS.values():
         assert s.pins[0].split()[-1] == s.sim_sha
-        assert f"catalog {s.catalog_tag}" in s.pins and f"registry {s.registry_tag}" in s.pins
+        if s.embedded_data:   # one blis-substrate release holds both, embedded in the binary
+            assert f"substrate {s.catalog_tag}" in s.pins and s.catalog_tag == s.registry_tag
+            assert "data embedded" in s.pins
+        else:
+            assert f"catalog {s.catalog_tag}" in s.pins and f"registry {s.registry_tag}" in s.pins
 
 
 def test_v015_scenario_has_fabric_coefficients(tmp_path):

@@ -1,4 +1,4 @@
-"""Read a BLIS v0.15.0 Result document into the flat metrics a v0.14.0 run printed.
+"""Read a BLIS Result document (v0.15.0: schema 1; v0.16.0: schema 2) into the flat metrics a v0.14.0 run printed.
 
 From v0.15.0, `blis run` prints one blis-schemas Result (`kind: Result`) on stdout and nothing else
 (inference-sim docs/guide/results.md:3-8). Scoring here (run_blis._completion_issue,
@@ -56,6 +56,29 @@ the keys above, in document order (natural: instance_0, instance_1, instance_2, 
 every flat key as a number, and its own instance_id must be its key, else ValueError, as for the cluster;
 `kv_allocation_failures` alone may be absent: it is omitempty there (sim/metrics_utils.go:115), as on v0.14.0.
 A one-instance run has no `engine.instances` (I:334-336): `metrics_all_instances` is [], as on v0.14.0.
+
+SCHEMA_2 (BLIS v0.16.0, 3f4998e). The document is blis-substrate v0.13.0's contracts/spec/result
+(`schema_version: 2`). Each flat key's home is the v0.16.0 table "Where each MetricsOutput field went"
+(D2 = inference-sim v0.16.0 docs/guide/results.md:121-141; R2 = blis-substrate@v0.13.0
+contracts/spec/result/result.go; I2 = inference-sim v0.16.0 cmd/result_inputs.go). What changed:
+
+| flat key           | schema 1                     | schema 2                                                      |
+|--------------------|------------------------------|---------------------------------------------------------------|
+| still_queued       | requests.still_queued        | requests.queued_at_horizon (D2:125)                           |
+| still_running      | requests.still_running       | requests.in_flight_at_horizon (D2:126)                        |
+| injected_requests  | requests.injected            | requests.generated less requests.dropped.admission_rejected   |
+| dropped_unservable | requests.dropped_unservable  | requests.dropped.unservable, 0 when absent (D2:128)           |
+| engine.cluster.*   | engine.cluster               | reports.engine.cluster, same keys and whole_run (D2:131-141)  |
+| per instance       | engine.instances             | reports.engine.instances, the same flat objects (D2:123)      |
+
+`requests.dropped` is a map of reason to count, omitted when empty (R2:489; I2:239-246 adds only
+reasons with a count). injected_requests: D2:127 maps it to `generated`, but `generated` counts every
+request the generator made, admission-rejected ones included (the fates sum to it, R2:541-548).
+v0.15.0's `requests.injected` was arrivals less admission rejections, and CachedRunner._shed_guard
+relies on that meaning: an admission-shedding run must show fewer injected than offered. So
+injected_requests is `generated` less `dropped.admission_rejected`; with no admission rejections, as
+in every run here, it is `generated`, D2's mapping. The other drop reasons (routing, gateway,
+unservable) stay in it, as they did in v0.15.0's injected.
 """
 
 from __future__ import annotations
@@ -87,6 +110,14 @@ CLUSTER_FIELDS: dict[str, tuple[str, ...]] = {
     "preemption_count": ("engine", "cluster", "preemptions"),
 }
 FLAT_KEYS = frozenset(CLUSTER_FIELDS) | {"instance_id"}
+
+# schema 2 (v0.16.0): flat key -> path, for the keys with one home (see SCHEMA_2 in the docstring);
+# injected_requests and dropped_unservable are derived in _cluster_v2
+_V2_MOVED = {"still_queued": ("requests", "queued_at_horizon"),
+             "still_running": ("requests", "in_flight_at_horizon")}
+CLUSTER_FIELDS_V2: dict[str, tuple[str, ...]] = {
+    k: _V2_MOVED.get(k, ("reports", *p) if p[0] == "engine" else p)
+    for k, p in CLUSTER_FIELDS.items() if k not in ("injected_requests", "dropped_unservable")}
 # an instance's MetricsOutput omits kv_allocation_failures when zero (omitempty)
 INSTANCE_OPTIONAL = frozenset({"kv_allocation_failures"})
 
@@ -106,8 +137,8 @@ def _at(doc: dict, path: tuple[str, ...]):
     return _number(v, ".".join(path))
 
 
-def _instance(iid: str, m) -> dict:
-    where = f"engine.instances.{iid}"
+def _instance(iid: str, m, where: str) -> dict:
+    where = f"{where}.{iid}"
     if not isinstance(m, dict):
         raise ValueError(f"Result document's {where} is not an object")  # noqa: TRY004
     if m.get("instance_id") != iid:
@@ -121,11 +152,30 @@ def _instance(iid: str, m) -> dict:
     return dict(sorted(out.items()))
 
 
-def parse_result_document(stdout: str) -> tuple[dict, list[dict]]:
-    """(metrics, metrics_all_instances) from a BLIS Result document: the cluster's flat metrics with
-    instance_id "cluster", and each instance's for a run of more than one. ValueError when stdout is
-    not one JSON document of kind Result, or a cluster or instance entry lacks a field the table above
-    reads (or holds a non-number there)."""
+def _v2_drops(doc: dict) -> dict:
+    """requests.dropped (by reason; omitted when empty), each count checked to be a number."""
+    dropped = doc["requests"].get("dropped", {}) if isinstance(doc.get("requests"), dict) else {}
+    if not isinstance(dropped, dict):
+        raise ValueError("Result document's requests.dropped is not a map of reason to count")  # noqa: TRY004
+    return {r: _number(n, f"requests.dropped.{r}") for r, n in dropped.items()}
+
+
+def _cluster_v2(doc: dict) -> dict:
+    """The cluster's flat metrics from a schema 2 Result (see SCHEMA_2 above)."""
+    metrics = {k: _at(doc, p) for k, p in CLUSTER_FIELDS_V2.items()}
+    _at(doc, ("requests", "generated"))
+    drops = _v2_drops(doc)
+    metrics["dropped_unservable"] = drops.get("unservable", 0)
+    metrics["injected_requests"] = doc["requests"]["generated"] - drops.get("admission_rejected", 0)
+    return metrics
+
+
+def parse_result_document(stdout: str, version: int = 1) -> tuple[dict, list[dict]]:
+    """(metrics, metrics_all_instances) from a BLIS Result document of schema `version` (1: v0.15.0,
+    2: v0.16.0): the cluster's flat metrics with instance_id "cluster", and each instance's for a run
+    of more than one. ValueError when stdout is not one JSON document of kind Result at that
+    schema_version, or a cluster or instance entry lacks a field the tables above read (or holds a
+    non-number there)."""
     try:
         doc = json.loads(stdout)
     except ValueError as e:
@@ -133,10 +183,33 @@ def parse_result_document(stdout: str) -> tuple[dict, list[dict]]:
     if not isinstance(doc, dict) or doc.get("kind") != KIND:
         kind = doc.get("kind") if isinstance(doc, dict) else type(doc).__name__
         raise ValueError(f"stdout is not a BLIS Result document (kind {kind!r})")
-    metrics = {k: _at(doc, p) for k, p in CLUSTER_FIELDS.items()}
+    if doc.get("schema_version") != version:
+        raise ValueError(f"Result document is schema_version {doc.get('schema_version')!r}, expected {version}")
+    if version == 2:
+        metrics, engine, where = _cluster_v2(doc), (doc.get("reports") or {}).get("engine") or {}, \
+            "reports.engine.instances"
+    else:
+        metrics, engine, where = {k: _at(doc, p) for k, p in CLUSTER_FIELDS.items()}, doc.get("engine") or {}, \
+            "engine.instances"
     metrics["instance_id"] = "cluster"
-    instances = (doc.get("engine") or {}).get("instances") or {}
+    instances = engine.get("instances") or {}
     if not isinstance(instances, dict):
-        raise ValueError("Result document's engine.instances is not a map of instance id to metrics")  # noqa: TRY004
-    per = [_instance(iid, m) for iid, m in instances.items()]   # document order
+        raise ValueError(f"Result document's {where} is not a map of instance id to metrics")  # noqa: TRY004
+    per = [_instance(iid, m, where) for iid, m in instances.items()]   # document order
     return dict(sorted(metrics.items())), per
+
+
+def check_embedded_data(stdout: str) -> None:
+    """ValueError unless the Result says BLIS read both its catalog and its registry from the copies
+    embedded in it (`data.catalog.source` and `data.registry.source` "embedded"; inference-sim v0.16.0
+    docs/guide/results.md:29): a stack with embedded data is priced on those, and its pins name no other."""
+    data = json.loads(stdout).get("data")
+    if not isinstance(data, dict):
+        raise ValueError(f"Result document's data is not an object: {data!r}")  # noqa: TRY004 (callers catch ValueError)
+    for what in ("catalog", "registry"):
+        entry = data.get(what)
+        if not isinstance(entry, dict):
+            raise ValueError(f"Result document's data.{what} is not an object: {entry!r}")  # noqa: TRY004
+        src = entry.get("source")
+        if src != "embedded":
+            raise ValueError(f"Result document's data.{what}.source is {src!r}, not 'embedded'")
